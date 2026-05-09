@@ -1,0 +1,49 @@
+
+اولا يجب تحميل بايثون من موقعه الرسمي 
+python.org/downloads
+تنزيل النسخة Python 3.13.3
+ومن ثم اضافته لمسارات النظام Add Python to PATH
+ويمكننا التأكد من التثبيت بالكتابة في التيرمنال
+python --version
+اذا ظهرت النسخة فقد تم تثبيته
+_________________________________________
+بعد تثبيت بايثون، نكتب يالتيرمنال 
+
+لتثبيت البيئة الافتراضية 1
+pip install pipenv
+نسحب المشروع من git او ننزله كملف zip
+git clone https://github.com/zena-am/Task-managment.git
+ندخل لملف المشروع
+cd Task-managment
+
+من ثم من مجلد المشروع
+pipenv install
+pipenv shell/ هذه سنستخدمها كل ما ندخل المشروع لندخل البيئة الافتراضية للمشروع وبعدها نكتب التعليمات
+
+اذا كان المشروع خال من الأخطاء
+اخر خطوة 
+(اننشاء الجداول)
+python manage.py migrate
+python manage.py runserver
+
+_______________________________
+اذا بقي بالمشروع اخطاء نزل المكتبات واحدة واحدة
+
+pipenv shell* اولا 
+ثم الباقي 
+
+pipenv install django
+pipenv install djangorestframework
+pipenv install djangorestframework-simplejwt
+pipenv install google-auth
+pipenv install requests
+pipenv install django-allauth
+
+تنزيل mysql
+pipenv install mysqlclient
+
+____________________________________________________________
+
+لرؤية الجداول 
+تنزيل اكستنشن mysql 
+
