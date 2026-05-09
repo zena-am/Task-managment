@@ -1,0 +1,90 @@
+{% extends 'base.html' %}
+{% block title %}Sign In - NESZEN3{% endblock %}
+{% load socialaccount %}
+
+{% block content %}
+<style>
+    /* تنسيق البطاقة الأساسية */
+    .auth-card {
+        background: white;
+        border-radius: 20px;
+        padding: 40px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.05);
+        max-width: 450px;
+        width: 100%;
+    }
+    /* تنسيق الأزرار لتكون توأماً لأزرار فلاتر */
+    .btn-social {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        height: 55px;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 16px;
+        margin-bottom: 12px;
+        transition: all 0.2s;
+        border: none;
+        text-decoration: none !important;
+    }
+    .btn-google {
+        background-color: #ffffff;
+        color: #1f2937;
+        border: 1px solid #e5e7eb;
+    }
+    .btn-github {
+        background-color: #24292e;
+        color: white;
+    }
+    .btn-guest {
+        background-color: #f3f4f6;
+        color: #4b5563;
+    }
+    .btn-social img {
+        width: 20px;
+        margin-right: 12px;
+    }
+    .btn-social i {
+        font-size: 20px;
+        margin-right: 12px;
+    }
+    .divider {
+        height: 1px;
+        background: #e5e7eb;
+        margin: 25px 0;
+    }
+</style>
+
+<div class="container d-flex align-items-center justify-content-center" style="min-height: 85vh;">
+    <div class="auth-card text-center">
+        <div class="mb-4">
+            <i class="fas fa-shield-alt text-primary fa-3x"></i>
+        </div>
+        
+        <h2 class="fw-bold text-dark mb-2">Welcome</h2>
+        <p class="text-muted mb-4">Choose your login method</p>
+
+        <a href="{% provider_login_url 'google' %}?prompt=select_account" class="btn-social btn-google shadow-sm">
+            <img src="https://playtht-website-assets.s3.amazonaws.com/img/brand/google.svg" alt="Google">
+            Continue with Google
+        </a>
+
+        <a href="{% provider_login_url 'github' %}" class="btn-social btn-github shadow-sm">
+            <img src="https://upload.wikimedia.org/wikipedia/commons/9/91/Octicons-mark-github.svg" style="filter: invert(1);" alt="GitHub">
+            Continue with GitHub
+        </a>
+
+        <div class="divider"></div>
+
+        <a href="/guest-login/" class="btn-social btn-guest">
+            <i class="fas fa-user-secret"></i>
+            Continue as Guest
+        </a>
+
+        <p class="mt-4 small text-muted">
+            By continuing, you agree to NESZEN terms.
+        </p>
+    </div>
+</div>
+{% endblock %}

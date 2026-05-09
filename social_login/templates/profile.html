@@ -1,0 +1,50 @@
+{% extends 'base.html' %}
+{% block title %}Profile - YourApp {% endblock %}
+
+{% block content %}
+<div class="card mx-auto shadow-sm" style="max-width: 500px; margin-top: 50px; border-radius: 12px;">
+    <div class="card-body text-center p-5">
+        <i class="fas fa-user-circle fa-5x mb-3 text-primary"></i>
+        
+        <h3 class="font-weight-bold">Welcome!</h3>
+        <hr>
+        
+        <div class="text-left px-4 mb-4">
+            <p class="mb-2"><strong><i class="fas fa-envelope mr-2"></i>Email:</strong> {{ request.user.email }}</p>
+            <p class="mb-0"><strong><i class="fas fa-calendar-alt mr-2"></i>Member since:</strong> {{ request.user.date_joined|date:"d M Y" }}</p>
+        </div>
+
+        <div class="alert alert-success border-0 bg-light mb-4">
+            <p class="text-success mb-1 font-weight-bold">You have successfully logged in.</p>
+            <p class="small text-muted mb-0">You can return to the app now.</p>
+        </div>
+
+        <div class="d-grid gap-2">
+            <button onclick="sendToFlutter()" class="btn btn-primary btn-lg w-100 mb-3 shadow-sm" style="border-radius: 8px; font-weight: 600;">
+                <i class="fas fa-mobile-alt mr-2"></i> العودة للتطبيق
+            </button>
+        </div>
+
+        <a href="{% url 'account_logout' %}" class="text-danger small font-weight-bold text-decoration-none">
+             <i class="fas fa-sign-out-alt"></i> Logout
+        </a>
+    </div>
+</div>
+
+<script>
+    function sendToFlutter() {
+        if (window.ToApp) {
+            window.ToApp.postMessage('return_home');
+        } else {
+            alert("يرجى المحاولة من داخل التطبيق");
+        }
+    }
+
+
+    window.onload = function() {
+        if (window.ToApp) {
+            console.log("Connected to App");
+        }
+    };
+</script>
+{% endblock %}

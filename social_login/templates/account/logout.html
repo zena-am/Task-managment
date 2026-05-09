@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Sign Out - YourApp{% endblock %}
+
+{% block content %}
+<div class="card mx-auto shadow-sm" style="max-width: 450px; margin-top: 60px; border: none; border-radius: 16px;">
+    <div class="card-body text-center p-5">
+        <div class="mb-4">
+            <i class="fas fa-sign-out-alt fa-4s text-danger" style="opacity: 0.8;"></i>
+        </div>
+        
+        <h3 class="fw-bold mb-2">Sign Out</h3>
+        <p class="text-muted mb-4 small">Are you sure you want to end your session and return to the app?</p>
+
+        <form method="post" action="{% url 'account_logout' %}" id="logout-form">
+            {% csrf_token %}
+            
+            <div class="d-grid">
+                <button type="button" onclick="handleLogout()" class="btn btn-primary btn-lg shadow-sm py-3" 
+                        style="border-radius: 12px; font-weight: 600; font-size: 1.1rem;">
+                    Confirm & Return
+                </button>
+            </div>
+        </form>
+
+        <div class="mt-4">
+            <a href="{% url 'profile' %}" class="text-decoration-none text-secondary small">
+                <i class="fas fa-times me-1"></i> Cancel
+            </a>
+        </div>
+    </div>
+</div>
+
+<script>
+    function handleLogout() {
+        // 1. Notify Flutter to prepare for closing the WebView
+        if (window.ToApp) {
+            window.ToApp.postMessage('logging_out');
+        }
+
+        // 2. Execute the actual logout
+        document.getElementById('logout-form').submit();
+    }
+</script>
+{% endblock %}
