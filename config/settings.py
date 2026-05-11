@@ -55,9 +55,10 @@ AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
 ]
 
-ACCOUNT_AUTHENTICATION_METHOD = "username_email"
+
+ACCOUNT_LOGIN_METHODS = {'email', 'username'}
 ACCOUNT_EMAIL_REQUIRED = True
-ACCOUNT_USERNAME_REQUIRED = True
+ACCOUNT_SIGNUP_FIELDS = ['email', 'username', 'password1', 'password2']
 AUTH_USER_MODEL = "users.User"
 
 MIDDLEWARE = [
