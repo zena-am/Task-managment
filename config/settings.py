@@ -126,15 +126,8 @@ SOCIALACCOUNT_PROVIDERS = {
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'task_management_db',
-        'USER': 'root',
-        'PASSWORD': 'zena.com0985754203',
-        'HOST': '127.0.0.1',
-        'PORT': '3306',
-        'OPTIONS': {
-            'autocommit': True,
-        },
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
 from datetime import timedelta
