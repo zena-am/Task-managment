@@ -1,12 +1,8 @@
-from users.models import User,Task
 from datetime import timedelta
 from django.utils import timezone
 from rest_framework import serializers
-
 from users.serializers.user import UserSerializer
-from .models import  Task
-
-
+from ..models import Task
 
 
 
@@ -27,11 +23,11 @@ class TaskSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'project', 'status', 'status_display', 'priority', 'priority_display',
             'time_expected', 'time_expected_hours', 'actual_duration', 'actual_duration_hours',
-            'strat_time', 'end_time', 'image', 'file', 'link', 'extra_data',
-            'assigned_to', 'assigned_to_detail', 'supervisor', 'supervisor_detail','is_overdue'
+            'strat_time', 'end_time', 'image', 'file', 'link',
+            'assigned_to', 'assigned_to_detail', 'supervisor', 'supervisor_detail', 'is_overdue'
         ]
 
-        read_only_fields = ['strat_time', 'end_time']
+        read_only_fields = ['start_time', 'end_time']
 
     def get_time_expected_hours(self, obj):
         if obj.time_expected:
@@ -57,23 +53,7 @@ class TaskSerializer(serializers.ModelSerializer):
             return timezone.now() > deadline_from_creation
 
         return False
-    def get_supervisor_details(self, obj):
-        if obj.supervisor:
-            return {
-                "id": obj.supervisor.id,
-                "username": obj.supervisor.username,
-                "email": obj.supervisor.email
-            }
-        return None
 
-    def get_assigned_to_details(self, obj):
-        if obj.assigned_to:
-            return {
-                "id": obj.assigned_to.id,
-                "username": obj.assigned_to.username,
-                "position": obj.assigned_to.profile.position if hasattr(obj.assigned_to, 'profile') else None
-            }
-        return None
 
 ###########################################################################################################
 

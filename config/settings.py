@@ -12,7 +12,18 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 from django.contrib.messages import constants as messages
+import os
+import firebase_admin
+from firebase_admin import credentials
 
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+service_account_path = os.path.join(BASE_DIR, 'task-495621-firebase-adminsdk-fbsvc-2a9b3d0660.json')
+
+
+if not firebase_admin._apps:
+    cred = credentials.Certificate(service_account_path)
+    firebase_admin.initialize_app(cred)
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -34,6 +45,7 @@ ALLOWED_HOSTS = []
 INSTALLED_APPS = [
     'users',
     'social_login',
+
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -41,13 +53,17 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 
+    'drf_spectacular',
+    'rest_framework.authtoken',
+    'rest_framework',
+
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google',
     'allauth.socialaccount.providers.github',
     'django.contrib.sites',
-    'rest_framework.authtoken',
+
 ]
 AUTHENTICATION_BACKENDS = [
 
@@ -139,14 +155,14 @@ DATABASES = {
 }
 from datetime import timedelta
 
-# في ملف settings.py
+
 SIMPLE_JWT = {
-   
+
     'ACCESS_TOKEN_LIFETIME': timedelta(days=1), 
-    
+
 
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7), 
-    
+
     'ROTATE_REFRESH_TOKENS': False,
     'BLACKLIST_AFTER_ROTATION': True,
     'ALGORITHM': 'HS256',
@@ -195,12 +211,26 @@ STATIC_URL = 'static/'
 
 
 REST_FRAMEWORK = {
+        'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework.authentication.TokenAuthentication',
         'rest_framework.authentication.SessionAuthentication'
     )
 }
+
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Project Management API',
+    'DESCRIPTION': 'Detailed documentation for Flutter developers',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'ENUM_NAME_OVERRIDES': {},
+    'POSTPROCESSING_HOOKS': [
+        'drf_spectacular.hooks.postprocess_schema_enums'
+    ],
+}
+
 MEDIA_URL = '/assets/'
 MEDIA_ROOT = BASE_DIR / 'assets'
 
@@ -229,4 +259,15 @@ MESSAGE_TAGS = {
 }
 SOCIALACCOUNT_LOGIN_ON_GET = True
 
-LOGIN_REDIRECT_URL = '/'
+
+LOGIN_REDIRECT_URL = '/auth/google/success/'
+
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'majdoulinabdalkareem@gmail.com'
+EMAIL_HOST_PASSWORD = 'gszpmsngdpqzakjd'
+
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+SERVER_EMAIL = EMAIL_HOST_USER
