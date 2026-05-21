@@ -22,8 +22,8 @@ class TaskSerializer(serializers.ModelSerializer):
         model = Task
         fields = [
             'id', 'title', 'project', 'status', 'status_display', 'priority', 'priority_display',
-            'time_expected', 'time_expected_hours', 'actual_duration', 'actual_duration_hours',
-            'strat_time', 'end_time', 'image', 'file', 'link',
+            'expected_duration', 'time_expected_hours', 'actual_duration', 'actual_duration_hours',
+            'start_time', 'end_time', 'image', 'file', 'link',
             'assigned_to', 'assigned_to_detail', 'supervisor', 'supervisor_detail', 'is_overdue'
         ]
 
@@ -64,7 +64,7 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
         model = Task
         fields = [
             'id', 'project', 'title', 'description', 'priority', 'status',
-            'time_expected', 'image', 'file', 'link',
+            'expected_duration', 'image', 'file', 'link',
             'assigned_to', 'supervisor'
         ]
         read_only_fields = ['id']

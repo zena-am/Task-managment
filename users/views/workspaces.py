@@ -9,6 +9,7 @@ from users.views.invitations import InvitationViewSet
 from django.db.models import Case, When, Value, BooleanField
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework.decorators import action
+from users.errors.exceptions import WorkspaceCannotLeaveAsCreator
 
 @extend_schema_view(
         list=extend_schema(tags=['فضاءات العمل'], summary="عرض فضاءات العمل الخاصة بالمستخدم مرتبة حسب التثبيت"),
@@ -89,10 +90,7 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
                 workspace = self.get_object()
 
                 if workspace.creator == request.user:
-                        return Response(
-                        {"error": "As the creator, you cannot leave this workspace. You must delete it or transfer ownership."},
-                        status=status.HTTP_400_BAD_REQUEST
-                )
+                        raise WorkspaceCannotLeaveAsCreator
 
                 member = get_object_or_404(WorkSpaceMember, user=request.user, workspace=workspace)
                 member.delete()

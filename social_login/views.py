@@ -1,4 +1,5 @@
 from django.shortcuts import render
+from rest_framework.decorators import action
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth  import get_user_model
@@ -43,6 +44,7 @@ class GoogleTokenAuthView(APIView):
         description="يستقبل هذا الرابط التوكن القادم من فايربيز، يتحقق منه، وينشئ حساباً للمستخدم إذا لم يكن موجوداً، ثم يعيد توكنات الدخول الخاصة بالنظام ",
         responses=GoogleAuthSerializer,
     )
+@action(detail=False, methods=['get'], url_path='googleLogin')
 class GoogleFirebaseAuthView(APIView):
     def post(self, request):
 

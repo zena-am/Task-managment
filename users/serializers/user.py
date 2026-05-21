@@ -1,6 +1,5 @@
 from rest_framework import serializers
 from ..models import Project, ProjectRole
-from ..error_messages import PROJECT_NOT_MEMBER, WORKSPACE_ACCESS_DENIED
 from django.contrib.auth import get_user_model
 from users.models import User,Task,WorkSpace,WorkSpaceMember,Project,ProjectRole
 

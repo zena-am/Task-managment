@@ -1,6 +1,7 @@
 from rest_framework import serializers
+
+from users.errors.exceptions import ProjectNotMember, WorkspaceAccessDenied
 from ..models import Project, ProjectRole
-from ..error_messages import PROJECT_NOT_MEMBER, WORKSPACE_ACCESS_DENIED
 from drf_spectacular.utils import extend_schema_field
 from users.models import User
 
@@ -24,7 +25,7 @@ class ProjectSerializer(serializers.ModelSerializer):
         def validate_workspace(self, value):
             user = self.context['request'].user
             if not value.members.filter(id=user.id).exists():
-                raise serializers.ValidationError(WORKSPACE_ACCESS_DENIED)
+                raise WorkspaceAccessDenied
             return value
 
         @extend_schema_field(serializers.ListSerializer(child=serializers.DictField(child=serializers.CharField())))
@@ -72,7 +73,7 @@ class ProjectCreateSerializer(serializers.ModelSerializer):
     def validate_workspace(self, value):
         user = self.context['request'].user
         if not value.members.filter(id=user.id).exists():
-            raise serializers.ValidationError(PROJECT_NOT_MEMBER)
+            raise ProjectNotMember
         return value
 
     def create(self, validated_data):
@@ -81,7 +82,7 @@ class ProjectCreateSerializer(serializers.ModelSerializer):
         project = Project.objects.create(**validated_data)
 
         for member_item in members_data:
-            user_id = member_item['user']['id']
+            user_id = member_item['user_id']
             role = member_item['role']
 
             ProjectRole.objects.create(

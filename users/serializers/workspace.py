@@ -1,6 +1,5 @@
 from rest_framework import serializers
 from ..models import WorkSpace, WorkSpaceMember, Task
-from ..error_messages import PROJECT_NOT_MEMBER, WORKSPACE_ACCESS_DENIED
 from users.models import User
 
 
@@ -84,7 +83,7 @@ class WorkSpaceCreateSerializer (serializers.ModelSerializer):
         members_with_roles = WorkSpaceMemberRoleSerializer(many=True, write_only=True, required=False)
         class Meta:
             model =WorkSpace
-            fields = ['id', 'name', 'description','is_pinned','members_with_roles']
+            fields = ['id', 'name', 'description','members_with_roles']
 
         def create(self, validated_data):
             members_data = validated_data.pop('members_with_roles', [])

@@ -4,6 +4,9 @@ from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from drf_spectacular.utils import extend_schema
+from users.errors.exceptions  import (WorkspaceNotFound,  ProjectNotFound,  EmailAndWorkspaceRequired, ProjectIdRequired, InvitationAlreadyAccepted,InvitationForbidden,InvitationRejectForbidden,
+)
+from users.errors.exceptions import ProjectNotFound
 from ..models import Project
 from ..models import Invitation, WorkSpaceMember, ProjectRole,WorkSpace
 from ..serializers import InvitationSerializer
@@ -48,14 +51,11 @@ class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixin
         workspace_id = request.data.get('workspace_id')
 
         if not email or not workspace_id:
-            return Response(
-                {"error": "Email and workspace_id are required."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            raise EmailAndWorkspaceRequired()
         try:
             workspace = WorkSpace.objects.get(id=workspace_id)
         except WorkSpace.DoesNotExist:
-            return Response({"error": "Workspace not found."}, status=status.HTTP_404_NOT_FOUND)
+            raise WorkspaceNotFound()
 
         sender_name = request.user.get_full_name() or request.user.username
         workspace_name = workspace.name
@@ -63,7 +63,7 @@ class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixin
         existing_invitation = Invitation.objects.filter(receiver_email=email, workspace_id=workspace_id, project_id=project_id).first()
         if existing_invitation:
             if existing_invitation.status == 'ACCEPTED':
-                return Response({"detail": "This user is already a member."}, status=status.HTTP_400_BAD_REQUEST)
+                raise InvitationAlreadyAccepted()
             existing_invitation.status = 'PENDING'
             existing_invitation.sender = request.user
             existing_invitation.role = role
@@ -119,10 +119,9 @@ class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixin
         try:
             project = Project.objects.get(id=project_id)
         except Project.DoesNotExist:
-            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+            raise ProjectNotFound()
         if not project_id:
-            return Response({"error": "project_id is required."}, status=status.HTTP_400_BAD_REQUEST)
-
+                raise ProjectIdRequired()
         members_ids = self.request.data.get('members_ids', [])
 
         if members_ids:
@@ -219,10 +218,7 @@ class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixin
 
 
         if invitation.receiver_email != request.user.email:
-            return Response(
-                {"error": "This invitation was not sent to your email address."},
-                status=status.HTTP_403_FORBIDDEN
-            )
+                    raise InvitationForbidden()
 
         with transaction.atomic():
             WorkSpaceMember.objects.get_or_create(
@@ -259,11 +255,7 @@ class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixin
     def reject(self, request, pk=None):
         invitation = self.get_object()
         if invitation.receiver_email != request.user.email:
-            return Response(
-                {"error": "You do not have permission to reject this invitation."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
+                raise InvitationRejectForbidden()
         invitation.status = 'REJECTED'
         invitation.receiver = request.user
         invitation.save()

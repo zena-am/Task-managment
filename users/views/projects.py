@@ -24,7 +24,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         return Project.objects.filter(workspace__members=self.request.user).distinct()
 #######################################################################
 
-def perform_create(self, serializer):
+    def perform_create(self, serializer):
         project = serializer.save()
         ProjectRole.objects.get_or_create(project=project, user=self.request.user, defaults={'role': 'ADMIN'})
 
