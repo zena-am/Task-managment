@@ -14,10 +14,9 @@
             <p class="mb-0"><strong><i class="fas fa-calendar-alt mr-2"></i>Member since:</strong> {{ request.user.date_joined|date:"d M Y" }}</p>
         </div>
 
-        <div class="alert alert-success border-0 bg-light mb-4">
-            <p class="text-success mb-1 font-weight-bold">You have successfully logged in.</p>
-            <p class="small text-muted mb-0">You can return to the app now.</p>
-        </div>
+        <a href="{% url 'google_login_success' %}" class="btn btn-outline-info w-100 mb-3" style="border-radius: 8px; font-weight: 600;">
+            <i class="fas fa-shield-alt mr-2"></i> عرض تفاصيل المصادقة (Token)
+        </a>
 
         <div class="d-grid gap-2">
             <button onclick="sendToFlutter()" class="btn btn-primary btn-lg w-100 mb-3 shadow-sm" style="border-radius: 8px; font-weight: 600;">
@@ -30,21 +29,4 @@
         </a>
     </div>
 </div>
-
-<script>
-    function sendToFlutter() {
-        if (window.ToApp) {
-            window.ToApp.postMessage('return_home');
-        } else {
-            alert("يرجى المحاولة من داخل التطبيق");
-        }
-    }
-
-
-    window.onload = function() {
-        if (window.ToApp) {
-            console.log("Connected to App");
-        }
-    };
-</script>
 {% endblock %}
