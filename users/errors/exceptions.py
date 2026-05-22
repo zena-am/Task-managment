@@ -72,6 +72,11 @@ class TaskCannotRevertError(BaseAppException):
     code = "TASK_CANNOT_REVERT"
     message = ErrorMessages.TASK_CANNOT_REVERT
     status_code = status.HTTP_400_BAD_REQUEST
+
+class TechnicalReportMissingError(BaseAppException):
+    code = "Technical_Report_Missing"
+    message = ErrorMessages.TechnicalReportMissingError
+    status_code = status.HTTP_400_BAD_REQUEST
 #workspace
 class WorkspaceAccessDenied(BaseAppException):
     code = "WORKSPACE_ACCESS_DENIED"

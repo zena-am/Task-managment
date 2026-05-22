@@ -25,4 +25,4 @@ from .project import (
 )
 from .notifications import NotificationSerializer
 from .invitation import InvitationSerializer
-from .task import TaskSerializer,TaskCreateUpdateSerializer
+from .task import TaskSerializer,TaskCreateUpdateSerializer,ManagerReportReviewSerializer

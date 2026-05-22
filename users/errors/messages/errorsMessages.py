@@ -32,7 +32,7 @@ class ErrorMessages:
     INVALID_STATUS = "Invalid status value."
     INVALID_PRIORITY = "Invalid priority value."
     PERMISSION_DENIED = "You do not have permission."
-
+    TechnicalReportMissingError="Cannot move to REVIEW: technical report is missing."
     TASK_CANNOT_REVERT = "You cannot revert a task from DONE status."
     TASK_NOT_OWNED = "You are not assigned to this task."
     TASK_NOT_ALLOWED = "You are not allowed to perform this action."

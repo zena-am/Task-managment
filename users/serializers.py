@@ -1,12 +1,4 @@
-from users.models import User,Task
-from datetime import timedelta
-from django.utils import timezone
-from rest_framework import serializers
-
-from users.serializers.user import UserSerializer
-from .models import  Task
-
-
+"""
 
 
 
@@ -93,4 +85,4 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
         time_expected = attrs.get('time_expected')
         if time_expected and time_expected.total_seconds() <= 0:
             raise serializers.ValidationError({"time_expected": "it must be greater than 0"})
-        return attrs
+        return attrs"""

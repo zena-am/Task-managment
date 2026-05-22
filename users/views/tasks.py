@@ -1,14 +1,14 @@
 from rest_framework import viewsets, permissions
 from django.contrib.auth import get_user_model
-from users.serializers import TaskCreateUpdateSerializer
+from users.serializers import TaskCreateUpdateSerializer,TaskSerializer,ManagerReportReviewSerializer
+from users.serializers.task import TechnicalReportDetailSerializer
 from users.services.task_query_service import TaskQueryService
 from users.services.task_service import TaskService
 from users.services.task_transfer_service import TaskTransferService
-from ..models import ProjectRole,Project
+from ..models import ProjectRole,Project, TechnicalReportForm
 from users.models import Task
 from rest_framework.decorators import action
 from ..permissions import IsProjectManagerOrReadOnly
-from ..serializers import TaskSerializer
 from drf_spectacular.utils import extend_schema,OpenApiExample, OpenApiTypes
 from django.db.models import Q,F,Sum,Count
 from rest_framework import viewsets, permissions, status
@@ -57,6 +57,7 @@ User = get_user_model()
         summary="تعديل كامل للمهمة (خاص بالمدراء والمشرفين فقط)",
         description="يسمح للمشرفين أو مدراء المشاريع بتعديل أي حقل من حقول مهمة معينة بحرية",
     ),
+
     destroy=extend_schema(
         tags=['المهام'],
         summary="حذف مهمة نهائياً (للمدير)",
@@ -106,8 +107,7 @@ class TaskView(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         instance = self.get_object()
         status_value = self.request.data.get("status")
-
-        TaskService.update_task(serializer, instance, status_value)
+        TaskService.perform_update(serializer, instance, self.request.user,status_value)
 
     @extend_schema(
         tags=['المهام'],
@@ -172,9 +172,10 @@ class TaskView(viewsets.ModelViewSet):
     @action(detail=True, methods=['patch'], url_path='status_update', permission_classes=[IsAuthenticated])
     def status_update(self, request, *args, **kwargs):
         task = self.get_object()
-        status_value = request.data.get('status')
+        status_value = request.data.get("status")
+        if not status_value:
+            return Response({"error": "Status value is required."}, status=400)
         TaskService.update_status(task, request.user, status_value)
-
         return Response(
             {"message": f"Task status updated successfully to {status_value}."},
             status=status.HTTP_200_OK
@@ -182,11 +183,41 @@ class TaskView(viewsets.ModelViewSet):
 
 
 
+    @extend_schema(
+    tags=['لوحة المدير'],
+    summary="مراجعة التقرير التقني للمهمة",
+    description=(
+        "تمكن المدير أو المشرف من مراجعة التقرير التقني المرتبط بالمهمة "
+        "يمكن للمدير تغيير حالة التقرير إلى 'APPROVED' أو 'REJECTED'، "
+        "وإضافة ملاحظات (feedback_text) التي تُسجَّل ضمن manager_feedbacks. "
+        "'DONE' حال الموافقة، تتحول حالة المهمة إلى  "
+        "في حال الرفض، تبقى المهمة في ويجب على الموظف تعديل التقرير."
+        "كما يمكن للمدير التعديل بعد الارسال"
+    ),
+    request=ManagerReportReviewSerializer,
+    responses={200: OpenApiTypes.OBJECT})
+    @action(detail=True, methods=['patch'], url_path='review_report')
+    def review_report(self, request, pk=None):
+        task = get_object_or_404(Task, pk=pk)
+        if not report:
+            return Response({"error": "No technical report found for this task."}, status=400)
+        report = task.technical_reports.order_by('-created_at').first()
+        serializer = ManagerReportReviewSerializer(data=request.data, instance=report, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+
+        response_data = TaskService.review_technical_report(
+            task=task,
+            report=report,
+            manager_user=request.user,
+            feedback_text=serializer.validated_data.get('feedback_text'),
+            new_status=serializer.validated_data.get('status')
+        )
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+
     def partial_update(self, request, *args, **kwargs):
         return super().partial_update(request, *args, **kwargs)
-
-
-
 
 """
         target_end_time = deadline_map.get(deadline_param.lower())
@@ -197,6 +228,20 @@ class TaskView(viewsets.ModelViewSet):
 
             return queryset.filter(end_time__gte=today_start, end_time__lte=target_end_time)
 """
+@extend_schema(
+    tags=['التقارير الخاصة بالموظف']
+)
+class TechnicalReportDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+    @extend_schema(
+        summary="عرض التقارير",
+    )
+    def get(self, request, task_id, format=None):
+        report = TechnicalReportForm.objects.filter(task_id=task_id).order_by('-created_at').first()
+        if not report:
+            return Response({"detail": "Report not found."}, status=404)
+        serializer = TechnicalReportDetailSerializer(report)
+        return Response(serializer.data)
 
 
 @extend_schema(

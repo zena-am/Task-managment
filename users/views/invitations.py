@@ -7,6 +7,7 @@ from drf_spectacular.utils import extend_schema
 from users.errors.exceptions  import (WorkspaceNotFound,  ProjectNotFound,  EmailAndWorkspaceRequired, ProjectIdRequired, InvitationAlreadyAccepted,InvitationForbidden,InvitationRejectForbidden,
 )
 from users.errors.exceptions import ProjectNotFound
+from users.serializers import task, user
 from ..models import Project
 from ..models import Invitation, WorkSpaceMember, ProjectRole,WorkSpace
 from ..serializers import InvitationSerializer
@@ -98,6 +99,11 @@ class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixin
             )
             notify_new_user(email, sender_name, workspace_name)
 
+        if user.id:
+            notify_existing_user(user.email, task.supervisor.get_full_name(), workspace.name)
+        else:
+            notify_new_user(user.email, task.supervisor.get_full_name(), workspace.name)
+            
             return Response({"detail": "Invitation sent successfully."}, status=status.HTTP_201_CREATED)
 ########################################################################دعوات للمشروع
     @extend_schema(

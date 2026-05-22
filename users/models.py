@@ -139,38 +139,54 @@ class ProjectRole(models.Model):
                 models.Index(fields=['role']),
         ]
 class Task(TimeStampedModel):
-        STATUS_CHOICES=[ ('UNASSIGNED','unassigned'),('TODO','to do'), ('INPROGRESS','in progress'), ('DONE','done') ]
-        PRIORITY_CHOICES = [('L', 'Low'), ('M', 'Medium'), ('H', 'High')]
-        creator  = models.ForeignKey(User, on_delete=models.CASCADE,related_name="created_tasks")
+        STATUS_CHOICES = [
+                ('UNASSIGNED', 'Unassigned'),
+                ('TODO', 'To Do'),
+                ('INPROGRESS', 'In Progress'),
+                ('REVIEW', 'Review'),
+                ('DONE', 'Done'),
+        ]
+
+        PRIORITY_CHOICES = [
+                ('L', 'Low'),
+                ('M', 'Medium'),
+                ('H', 'High'),
+        ]
+
+        creator = models.ForeignKey(User, on_delete=models.CASCADE, related_name="created_tasks")
         project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='tasks')
         priority = models.CharField(max_length=1, choices=PRIORITY_CHOICES, default='M')
-        status=models.CharField(max_length=20,choices=STATUS_CHOICES,default='TODO')
+        status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='TODO')
         title = models.CharField(max_length=200)
-        description=models.TextField()
-        expected_duration= models.DurationField()
+        description = models.TextField()
+        expected_duration = models.DurationField()
         actual_duration = models.DurationField(null=True, blank=True)
-        start_time=models.DateTimeField(null=True,blank=True)
-        end_time=models.DateTimeField(null=True,blank=True)
-        image = models.ImageField(upload_to=TaskPhotoPath, null=True, blank=True)
-        file = models.FileField(upload_to=TaskFilePath, null=True, blank=True)
+        start_time = models.DateTimeField(null=True, blank=True)
+        end_time = models.DateTimeField(null=True, blank=True)
         link = models.URLField(max_length=500, null=True, blank=True)
-        due_date=models.DateTimeField()
-        assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True,  blank=True,related_name='assigned_tasks')
-        supervisor = models.ForeignKey(User, on_delete=models.SET(get_default_user),related_name='supervised_tasks')
+        due_date = models.DateTimeField()
+        assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_tasks')
+        supervisor = models.ForeignKey(User, on_delete=models.SET(get_default_user), related_name='supervised_tasks')
 
         class Meta:
                 indexes = [
-                        models.Index(fields=["status"]),
-                        models.Index(fields=["project"]),
-                        models.Index(fields=["assigned_to"]),
+                models.Index(fields=["status"]),
+                models.Index(fields=["project"]),
+                models.Index(fields=["assigned_to"]),
                 ]
                 ordering = ["-created_at"]
 
 
+class TaskImage(TimeStampedModel):
+        task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='images')
+        user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='uploaded_task_images')
+        image = models.ImageField(upload_to=TaskPhotoPath)
 
 
-
-
+class TaskFile(TimeStampedModel):
+        task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='files')
+        user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='uploaded_task_files')
+        file = models.FileField(upload_to=TaskFilePath)
 
 class TechnicalReportForm(TimeStampedModel):
 
@@ -185,19 +201,25 @@ class TechnicalReportForm(TimeStampedModel):
         ('SUBMITTED', 'Submitted'),
         ('APPROVED', 'Approved'),
         ('REJECTED', 'Rejected'), ]
-        project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='technical_reports_task')
+
+        task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='technical_reports')
         user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='my_technical_reports')
-        quality=models.CharField(choices=QUALITY_CHOICES,max_length=255)
+        #
         status = models.CharField(max_length=20, choices=REPORT_STATUS, default='DRAFT')
+        #
         image=models.ImageField(upload_to=TechnicalImage,null=True,blank=True)
         file=models.FileField( upload_to=TechnicalReportPath, max_length=100,blank=True, null=True)
         description=models.TextField(null=False)
         duration_time= models.DurationField(null=True, blank=True)
         url=models.URLField(blank=True, null=True)
+        #
+        quality=models.CharField(choices=QUALITY_CHOICES,max_length=255,null=True)
+        manager_feedback = models.TextField(null=True, blank=True)
+        manager_feedbacks = models.JSONField(default=list, blank=True)
+
         class Meta:
                 indexes = [
         models.Index(fields=['user']),
-        models.Index(fields=['project']),
         models.Index(fields=['status']),]
                 ordering = ['-created_at']
 
@@ -218,7 +240,6 @@ class BugReportForm(TimeStampedModel):
         status = models.CharField(max_length=10, choices=BUG_STATUS, default='OPEN')
         dangerous_level=models.CharField(choices=DANGEROUS_CHOICES,max_length=255)
         title=models.CharField( max_length=50)
-        project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='bugs')
         assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_bugs')
         description=models.TextField(null=False)
         url = models.URLField(blank=True, null=True)
@@ -310,6 +331,8 @@ class Notification(TimeStampedModel):
         ('TASK_UNASSIGNED', 'TASK_UNASSIGNED'),
         ('SYSTEM_ALERT', 'System Alert'),
         ('COMMENT_ADDED', 'New Comment'),
+        ('REPORT_REJECTED', 'Report Rejected'),
+        ('REPORT_APPROVED', 'Report Approved'),
         ]
         recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
         notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES, default='SYSTEM_ALERT')
@@ -327,7 +350,10 @@ class ActivityLog(TimeStampedModel):
         ('TASK_UNASSIGNED', 'Task Unassigned'),
         ('MEMBER_REMOVED', 'User Removed from Workspace'),
         ('MEMBER_LEFT', 'User left from Workspace'),
-        ('ACCOUNT_PURGED', 'Account Deleted'),('GENERAL_UPDATE','General update')
+        ('ACCOUNT_PURGED', 'Account Deleted'),
+        ('GENERAL_UPDATE','General update'),
+        ('REPORT_REVIEWED','rerport reviewde'),
+
         ]
         user=models.ForeignKey(User,on_delete=models.CASCADE)
         action = models.CharField(max_length=100,choices=ActionTypes,default='GENERAL_UPDATE')
@@ -339,3 +365,5 @@ class TaskComment(TimeStampedModel):
         user = models.ForeignKey(User, on_delete=models.CASCADE)
         content = models.TextField()
         file = models.FileField(upload_to=CommentAttachmentPath, null=True, blank=True)
+
+
