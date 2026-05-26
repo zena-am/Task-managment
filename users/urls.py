@@ -19,11 +19,9 @@ router.register(r'searchUser', views.searchUserViewSet, basename='search-user')
 router.register(r'TaskView', views.TaskView, basename='TaskView')
 
 
-#router.register(r'TransferSystemBot', views.TransferSystemBot, basename='Transfer')
 
 urlpatterns = [
 
-    # path('login/', views.Token.as_view()),
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
 

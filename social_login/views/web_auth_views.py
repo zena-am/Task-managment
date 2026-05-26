@@ -1,10 +1,7 @@
-from django.shortcuts import render
-from rest_framework.decorators import action
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth  import get_user_model
-from django.conf import settings
-from django.contrib.auth import authenticate, logout
+from django.contrib.auth import  logout
 from django.contrib import messages
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -12,14 +9,6 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from google.oauth2 import id_token
 from google.auth.transport import requests
 from users.models import User
-from firebase_admin import auth as firebase_auth
-from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiResponse
-from .serializers import GoogleAuthSerializer
-"""
-class Token(TokenObtainPairView):
-    serializer_class = MyTokenObtainPairSerializer
-
-"""
 
 
 class GoogleTokenAuthView(APIView):
@@ -38,40 +27,8 @@ class GoogleTokenAuthView(APIView):
             })
         except ValueError:
             return Response({'error': 'Invalid Token'}, status=400)
-###########################################################################
-@extend_schema(
-        summary="تسجيل الدخول عبر جوجل ",
-        description="يستقبل هذا الرابط التوكن القادم من فايربيز، يتحقق منه، وينشئ حساباً للمستخدم إذا لم يكن موجوداً، ثم يعيد توكنات الدخول الخاصة بالنظام ",
-        responses=GoogleAuthSerializer,
-    )
-@action(detail=False, methods=['get'], url_path='googleLogin')
-class GoogleFirebaseAuthView(APIView):
-    def post(self, request):
-
-        id_token = request.data.get('firebase_token')
-
-        try:
-
-            decoded_token = firebase_auth.verify_id_token(id_token)
-            email = decoded_token.get('email')
-            name = decoded_token.get('name', email.split('@')[0])
 
 
-            user, created = User.objects.get_or_create(
-                email=email,
-
-                defaults={'username': email, 'first_name': name}
-            )
-
-            refresh = RefreshToken.for_user(user)
-            return Response({
-                'access': str(refresh.access_token),
-                'refresh': str(refresh),
-                'username': user.username
-            })
-
-        except Exception as e:
-            return Response({'error': 'Invalid Firebase Token'}, status=400)
 ##############################################################################################33
 CustomUser = get_user_model()
 from rest_framework_simplejwt.tokens import RefreshToken

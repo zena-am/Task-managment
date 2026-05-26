@@ -224,6 +224,42 @@ class TechnicalReportForm(TimeStampedModel):
                 ordering = ['-created_at']
 
 
+class RequestForm(TimeStampedModel):
+        REQUEST_TYPES = [
+        ('LEAVE', 'Leave Request '),
+        ('RESOURCE', 'Resource Request '),
+        ('ACCESS', 'Access Request '),
+        ('SUPPORT', 'Technical Support'),
+        ('OTHER', 'Other'),]
+
+        PRIORITY_LEVELS = [
+        ('LOW', 'Low'),
+        ('NORMAL', 'Normal'),
+        ('URGENT', 'Urgent'),]
+
+        STATUS_CHOICES = [
+        ('PENDING', 'Pending'),
+        ('APPROVED', 'Approved'),
+        ('REJECTED', 'Rejected'), ]
+        user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='requests')
+        request_type = models.CharField(max_length=20, choices=REQUEST_TYPES, default='OTHER')
+        priority = models.CharField(max_length=10, choices=PRIORITY_LEVELS, default='NORMAL')
+        status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='PENDING')
+        manager_feedback = models.TextField(blank=True, null=True)
+        reason = models.TextField()
+        project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='my_requests')
+        title=models.CharField( max_length=220)
+        file = models.FileField(upload_to=RequestPath, blank=True, null=True)
+        image=models.ImageField(upload_to=RequestImage,null=True,blank=True)
+        time=models.DateTimeField()
+        class Meta:
+                indexes = [
+        models.Index(fields=['user']),
+        models.Index(fields=['project']),
+        models.Index(fields=['status']),]
+                ordering = ['-created_at']
+
+
 
 
 
@@ -253,43 +289,6 @@ class BugReportForm(TimeStampedModel):
         models.Index(fields=['status']),]
                 ordering = ['-created_at']
 
-
-
-class RequestForm(TimeStampedModel):
-        REQUEST_TYPES = [
-        ('LEAVE', 'Leave Request '),
-        ('RESOURCE', 'Resource Request '),
-        ('ACCESS', 'Access Request '),
-        ('SUPPORT', 'Technical Support'),
-        ('OTHER', 'Other'),]
-
-        PRIORITY_LEVELS = [
-        ('LOW', 'Low'),
-        ('NORMAL', 'Normal'),
-        ('URGENT', 'Urgent'),]
-
-        STATUS_CHOICES = [
-        ('PENDING', 'Pending'),
-        ('APPROVED', 'Approved'),
-        ('REJECTED', 'Rejected'), ]
-        user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='requests')
-        project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='request_reports_task')
-        request_type = models.CharField(max_length=20, choices=REQUEST_TYPES, default='OTHER')
-        priority = models.CharField(max_length=10, choices=PRIORITY_LEVELS, default='NORMAL')
-        status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='PENDING')
-        manager_feedback = models.TextField(blank=True, null=True)
-        reason = models.TextField()
-        project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='my_requests')
-        title=models.CharField( max_length=220)
-        file = models.FileField(upload_to=RequestPath, blank=True, null=True)
-        image=models.ImageField(upload_to=RequestImage,null=True,blank=True)
-        time=models.DateTimeField()
-        class Meta:
-                indexes = [
-        models.Index(fields=['user']),
-        models.Index(fields=['project']),
-        models.Index(fields=['status']),]
-                ordering = ['-created_at']
 
 
 
