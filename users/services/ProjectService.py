@@ -1,5 +1,8 @@
-from users.models import ProjectRole
+from users.models import ProjectRole, WorkSpaceMember
+from users.serializers import workspace
 from users.services import WorkspaceService
+from users.models import Project, ProjectRole
+from users.services.invitationsService import InvitationService
 
 
 class ProjectService:
@@ -24,21 +27,27 @@ class ProjectService:
             ProjectService.handle_project_invitations(project, member_emails, user, data)
 
         return project
-####
-from users.models import Project, ProjectMember
-from users.services.invitationsService import InvitationService
 
 
 class ProjectService:
     @staticmethod
     def get_user_projects(user):
-        return Project.objects.filter(workspace__members=user).distinct()
+        is_admin = WorkSpaceMember.objects.filter(workspace=workspace,user=user,role='ADMIN').exists()
+
+        if is_admin:
+            return Project.objects.filter(workspace=workspace)
+
+        return Project.objects.filter(
+            workspace=workspace,
+            projectrole__user=user
+            ).distinct()
+
 
     @staticmethod
     def create_project(serializer, user, data):
         project = serializer.save()
 
-        ProjectMember.objects.get_or_create(
+        ProjectRole.objects.get_or_create(
             project=project,
             user=user,
             defaults={"role": "ADMIN"}

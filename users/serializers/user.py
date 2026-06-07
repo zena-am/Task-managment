@@ -53,6 +53,11 @@ class ProjectMemberDetailSerializer(serializers.ModelSerializer):
             'id', 'username', 'email', 'first_name', 'last_name',
             'avatar', 'phone', 'role', 'total_tasks', 'completed_tasks'
         ]
+    def get_can_delete(self, obj):
+        request_user = self.context['request'].user
+        is_request_user_owner = ProjectRole.objects.filter(project=obj.project, user=request_user, role='OWNER').exists()
+        return is_request_user_owner
+
     def get_role(self, obj):
         project_id = self.context.get('project_id')
         project_role = ProjectRole.objects.filter(project_id=project_id, user=obj).first()

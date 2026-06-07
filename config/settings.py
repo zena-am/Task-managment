@@ -8,12 +8,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-75950%b6k&a&0ma508=@1z=jz2a9x#@z)r7&&0akt(%(w_2)lb'
 
 DEBUG = True
+AUTH_USER_MODEL = 'users.User'
 
 ALLOWED_HOSTS = ["127.0.0.1", "localhost",  "192.168.116.146","0.0.0.0"]
 
 CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:8000",
     "http://localhost:8000",
+    
     "http://127.0.0.1:8080",
     "http://localhost:8080",
     "http://192.168.116.146",
@@ -64,7 +66,7 @@ AUTHENTICATION_BACKENDS = [
 ACCOUNT_AUTHENTICATION_METHOD = "username_email"
 ACCOUNT_EMAIL_REQUIRED = True
 ACCOUNT_USERNAME_REQUIRED = True
-AUTH_USER_MODEL = "users.User"
+
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -230,8 +232,6 @@ CSRF_COOKIE_SAMESITE = 'Lax'
 SESSION_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_HTTPONLY = False
 SECURE_REFERRER_POLICY = "no-referrer-when-downgrade"
-
-
 
 
 MESSAGE_TAGS = {

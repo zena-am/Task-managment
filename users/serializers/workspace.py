@@ -27,6 +27,7 @@ class WorkSpaceSerializer(serializers.ModelSerializer):
 
                 return obj.creator == request.user
             return False
+
         def get_members_details(self, obj):
             workspace_members = WorkSpaceMember.objects.filter(workspace=obj).select_related('user')
             return [

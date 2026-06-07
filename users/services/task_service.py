@@ -1,10 +1,13 @@
 from django.utils import timezone
+from users.constants import create_notification
 from users.models import ActivityLog, Invitation, Notification, ProjectRole, TechnicalReportForm
 from users.errors.exceptions import (
 TaskAlreadyAssigned, InvalidStatusError, PermissionDeniedError, TechnicalReportMissingError)
 from rest_framework import serializers
 from django.utils import timezone
 from users.models import Task, Notification, ActivityLog
+from users.services.invitationsMemberService import InvitationService
+from ..models import ProjectRole, TechnicalReportForm, User
 
 class TaskService:
 
@@ -12,25 +15,61 @@ class TaskService:
     def claim_task(task, user):
         if task.assigned_to is not None:
             raise TaskAlreadyAssigned()
-        is_project_member = ProjectRole.objects.filter(project=task.project, user=user).exists()
-
-        if not is_project_member:
-            workspace = task.project.workspace
-            project = task.project
-            Invitation.objects.create(
-                sender=task.supervisor,
-                receiver_email=user.email,
-                workspace=workspace,
-                project=project,
-                role='EMPLOYEE',
-                status='PENDING'
-            )
         task.assigned_to = user
         task.status = "TODO"
         task.save()
+        managers = User.objects.filter(
+            projectrole__project=task.project,
+            projectrole__role='MANAGER')
+
+        for manager in managers:
+            create_notification(
+                recipient=manager,
+                notification_type="TASK_CLAIMED",
+                title="تم استلام مهمة",
+                message=f"قام الموظف {user.username} باستلام المهمة: {task.title}",
+                navigation_target=f"/tasks/{task.id}"
+            )
 
         return task
+    @staticmethod
+    def create_task(self, serializer):
+        assigned_user = serializer.validated_data.get('assigned_to')
+        project = serializer.validated_data.get('project')
 
+        if assigned_user is not None:
+            initial_status = 'TODO'
+        else:
+            initial_status = 'UNASSIGNED'
+
+        task =  serializer.save(
+            creator=self.request.user,
+            status=initial_status
+        )
+        task.supervisors.add(self.request.user)
+
+        is_project_member = True
+        if assigned_user:
+            is_project_member = ProjectRole.objects.filter(project=project,user=assigned_user).exists()
+        create_notification(
+        recipient=assigned_user,
+        notification_type="TASK_ASSIGNED",
+        title="مهمة جديدة",
+        message=f"قام {self.request.user.username} بإسناد مهمة جديدة لك: {task.title}",
+        navigation_target=f"/tasks/{task.id}")
+
+        if not is_project_member:
+            InvitationService.send_project_invitation(
+                sender=self.request.user,
+                data={
+                    "project_id": task.project.id,
+                    "member_emails": [assigned_user.email],
+                    "role": "EMPLOYEE"
+                }
+            )
+        task.supervisors.add(self.request.user)
+
+        return task
 
 
 
@@ -51,33 +90,39 @@ class TaskService:
             user=user,
             role='ADMIN'
         ).exists()
+        """
+        if user != task.assigned_to and user !=  task.supervisors.filter(id=user.id).exists() and not is_project_admin:
+            raise PermissionDeniedError()
+            """
+        is_supervisor = task.supervisors.filter(id=user.id).exists()
 
-        if user != task.assigned_to and user != task.supervisor and not is_project_admin:
+        if user != task.assigned_to and not is_supervisor and not is_project_admin:
             raise PermissionDeniedError()
 
         if status_value == "INPROGRESS" and not task.start_time:
             task.start_time = timezone.now()
 
+
         if status_value == "REVIEW":
-            report = TechnicalReportForm.objects.filter(task=task, user=task.assigned_to).order_by('-created_at').first()
+            report = TechnicalReportForm.objects.filter(
+                task=task,
+                user=task.assigned_to,
+                status='SUBMITTED'
+            ).order_by('-created_at').first()
+
             if not report:
-                raise TechnicalReportMissingError()
+                raise TechnicalReportMissingError("Employee must submit a technical report before review.")
 
 
-            if report.status == "DRAFT":
-                report.status = "SUBMITTED"
-                report.save()
-
-
-
-            if task.supervisor:
+            for supervisor in task.supervisors.all():
                 Notification.objects.create(
-                    recipient=task.supervisor,
+                    recipient=supervisor,
                     notification_type='REPORT_SUBMITTED',
                     title="New Technical Report Submitted",
                     message=f"Employee {user.get_full_name() or user.username} has submitted a technical report for the task '{task.title}'.",
                     navigation_target=f"/task_details/{task.id}"
                 )
+
             task.status = status_value
             task.save()
 
@@ -85,7 +130,7 @@ class TaskService:
 
 
     @staticmethod
-    def review_technical_report(task, report, manager_user, feedback_text=None, new_status=None):
+    def review_technical_report(task, report, manager_user, feedback_text=None, new_status=None, quality=None):
         now = timezone.now()
         manager_entry = None
 
@@ -99,6 +144,11 @@ class TaskService:
             current_feedbacks.append(manager_entry)
             report.manager_feedbacks = current_feedbacks
             report.manager_feedback = feedback_text
+        if quality:
+            report.quality = quality
+
+            report.status = new_status
+            report.save()
         else:
             manager_entry = None
 
@@ -114,7 +164,7 @@ class TaskService:
                 recipient=task.assigned_to,
                 notification_type='REPORT_Approved',
                 title="Report accepted",
-                message=f"Your report for task '{task.task.title}' was reviewed by {manager_user.get_full_name()} and accepted.",
+                message=f"Your report for task '{task.title}' was reviewed by {manager_user.get_full_name()} and accepted.",
                 navigation_target=f"/report_details/{report.id}"
             )
 
@@ -124,19 +174,19 @@ class TaskService:
                 action_id=report.id,
                 changes={
                     "subject_name": manager_user.username,
-                    "target_title": f"Report for {task.task.title}",
+                    "target_title": f"Report for {task.title}",
                     "note": feedback_text,
                     "is_by_admin": True
                 }
             )
 
         elif new_status == 'REJECTED':
-            task.status = "REVIEW"
+            task.status = "INPROGRESS"
             Notification.objects.create(
                 recipient=task.assigned_to,
                 notification_type='REPORT_REJECTED',
                 title="Report Needs Adjustment",
-                message=f"Your report for task '{task.task.title}' was reviewed by {manager_user.get_full_name()} and needs adjustments.",
+                message=f"Your report for task '{task.title}' was reviewed by {manager_user.get_full_name()} and needs adjustments.",
                 navigation_target=f"/report_details/{report.id}"
             )
 
@@ -146,7 +196,7 @@ class TaskService:
                 action_id=report.id,
                 changes={
                     "subject_name": manager_user.username,
-                    "target_title": f"Report for {task.task.title}",
+                    "target_title": f"Report for {task.title}",
                     "note": feedback_text,
                     "is_by_admin": True
                 }
@@ -171,13 +221,14 @@ class TaskService:
         else:
             initial_status = 'UNASSIGNED'
 
-        serializer.save(
-            supervisor=self.request.user,
+        task =  serializer.save(
             user=self.request.user,
             status=initial_status
         )
 
+        task.supervisors.add(self.request.user)
 
+        return task
 
     def perform_update(self, serializer):
         status = self.request.data.get('status')

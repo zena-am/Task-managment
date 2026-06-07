@@ -1,12 +1,12 @@
 from django.db.models import Case, When, Value, BooleanField
 from django.shortcuts import get_object_or_404
-
+from django.db import transaction
 from users.models import WorkSpace, WorkSpaceMember
 from users.errors.exceptions import WorkspaceCannotLeaveAsCreator
 from users.services.invitationsService import InvitationService
 
 
-class WorkspaceService:
+class WorkspaceServices:
     @staticmethod
     def get_user_workspaces(user):
         return WorkSpace.objects.filter(members=user).annotate(
@@ -21,20 +21,20 @@ class WorkspaceService:
             )
         ).order_by('-user_pinned', '-id').distinct()
 
+
     @staticmethod
     def create_workspace(serializer, user, data):
         workspace = serializer.save(creator=user)
 
-        WorkSpaceMember.objects.get_or_create(
-            user=user,
+        WorkSpaceMember.objects.get_or_create(user=user,
             workspace=workspace,
             defaults={
                 "role": "ADMIN",
-                "is_pinned": True
+                "is_pinned":False
             }
         )
 
-        invitations_result = WorkspaceService._send_workspace_invitations(
+        invitations_result = WorkspaceServices._send_workspace_invitations(
             sender=user,
             workspace=workspace,
             data=data
@@ -49,7 +49,7 @@ class WorkspaceService:
     def update_workspace(serializer, user, data):
         workspace = serializer.save()
 
-        invitations_result = WorkspaceService._send_workspace_invitations(
+        invitations_result = WorkspaceServices._send_workspace_invitations(
             sender=user,
             workspace=workspace,
             data=data
@@ -59,6 +59,9 @@ class WorkspaceService:
             "workspace": workspace,
             "invitations_result": invitations_result
         }
+
+
+
 
     @staticmethod
     def toggle_pin(user, workspace):
@@ -92,11 +95,34 @@ class WorkspaceService:
         return {
             "message": f"You have successfully left the workspace: '{workspace.name}'."
         }
+    @staticmethod
+    def transfer_ownership(workspace, new_owner, current_user):
+
+        if workspace.creator != current_user:
+            raise PermissionError("أنت لست مالك هذا الفضاء.")
+
+        if not workspace.members.filter(user=new_owner).exists():
+            raise ValueError("لا يمكن نقل الملكية لشخص ليس عضواً في الفضاء.")
+
+        with transaction.atomic():
+            workspace.creator = new_owner
+            workspace.save()
+
+            WorkSpaceMember.objects.filter(workspace=workspace, user=new_owner).update(role='ADMIN')
+
+        return workspace
+
+
+
+
+
+
+
 
     @staticmethod
     def _send_workspace_invitations(sender, workspace, data):
-        member_emails = WorkspaceService._get_list_value(data, "member_emails")
-        role = WorkspaceService._get_value(data, "role") or "EMPLOYEE"
+        member_emails = WorkspaceServices._get_list_value(data, "member_emails")
+        role = WorkspaceServices._get_value(data, "role") or "EMPLOYEE"
 
         results = []
 

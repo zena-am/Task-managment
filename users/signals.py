@@ -1,5 +1,7 @@
 from django.db.models.signals import post_save, post_delete, pre_delete, pre_save
 from django.dispatch import receiver
+
+from users.constants import create_activity_log
 from .models import User, Task, ActivityLog, Notification,WorkSpaceMember,ProjectRole
 
 
@@ -20,7 +22,7 @@ def create_task_notification(sender, instance, created, **kwargs):
             navigation_target=f"/task_details/{instance.id}"
         )
 
-        ActivityLog.objects.create(
+        create_activity_log(
             user=assignee,
             action='TASK_ASSIGNED',
             action_id=instance.id,
@@ -45,7 +47,7 @@ def create_task_notification(sender, instance, created, **kwargs):
                 navigation_target=f"/task_details/{instance.id}"
             )
 
-            ActivityLog.objects.create(
+            create_activity_log(
                 user=admin_user,
                 action='GENERAL_UPDATE',
                 action_id=instance.id,
@@ -88,7 +90,7 @@ def notify_on_task_unassignment(sender, instance, **kwargs):
                     message=f"The manager has removed you from the task: '{instance.title}'.",
                     navigation_target="/my_tasks",
                 )
-        ActivityLog.objects.create(
+        create_activity_log(
                 user=former_assignee,
                 action="TASK_UNASSIGNED",
                 action_id=instance.id,
@@ -119,7 +121,7 @@ def notify_on_task_unassignment(sender, instance, **kwargs):
                         navigation_target=f"/task_details/{instance.id}")
 
             log_reason = f"Manager removed {former_assignee.username} from task '{instance.title}'." if is_kicked else f"{former_assignee.username} stepped down from task '{instance.title}'."
-            ActivityLog.objects.create(
+            create_activity_log(
                     user=admin_user,
                     action="TASK_UNASSIGNED",
                     action_id=instance.id,
@@ -159,7 +161,7 @@ def notify_workspace_manager_on_leave(sender, instance, **kwargs):
         message=f"Your membership in workspace '{instance.workspace.name}' has been terminated by the administrator.",
         navigation_target="/home")
 
-        ActivityLog.objects.create(
+        create_activity_log(
         user=target_user,
         action="MEMBER_REMOVED" if is_kicked else "MEMBER_LEFT",
         action_id=workspace.id,
@@ -183,7 +185,7 @@ def notify_workspace_manager_on_leave(sender, instance, **kwargs):
                     navigation_target=f"/workspace_details/{workspace.id}"
         )
 
-            ActivityLog.objects.create(
+            create_activity_log(
                 user=admin_user,
                 action="MEMBER_REMOVED" if is_kicked else "MEMBER_LEFT",
                 action_id=instance.workspace.id,
@@ -201,16 +203,23 @@ def notify_project_manager_on_leave(sender, instance, **kwargs):
         target_user = instance.user
         user_role = instance.role
         is_kicked = getattr(instance, 'is_being_kicked', False)
+        remaining_managers = ProjectRole.objects.filter(project=project, role='MANAGER').exclude(user=instance.user)
 
         if user_role == 'MANAGER':
             admins = WorkSpaceMember.objects.filter(workspace=project.workspace, role='ADMIN')
+            affected_tasks = Task.objects.filter(project=project)
+            task_count = affected_tasks.count()
         else:
-            admins = ProjectRole.objects.filter(project=project, role='ADMIN').exclude(user=target_user)
-
+            admins = ProjectRole.objects.filter(project=project, role='MANAGER').exclude(user=target_user)
 
         if user_role == 'MANAGER':
             user_reason = f"Your management role in project '{project.name}' was terminated." if is_kicked else f"You have stepped down from managing the project '{project.name}'."
             manager_reason = f"Manager '{target_user.username}' was removed from project '{project.name}'." if is_kicked else f"Manager '{target_user.username}' has voluntarily left the project '{project.name}'."
+            if task_count > 0:
+                if remaining_managers.exists():
+                    manager_reason += f" Note: {task_count} tasks remain, but there are other managers available."
+                else:
+                    manager_reason += f" WARNING: {task_count} tasks now have NO manager!"
             alert_title = "Project Manager Left" if not is_kicked else "Project Manager Removed"
         else:
             user_reason = f"Your membership in project '{project.name}' was terminated by the administrator." if is_kicked else f"You have voluntarily left the project '{project.name}'."
@@ -225,7 +234,7 @@ def notify_project_manager_on_leave(sender, instance, **kwargs):
         message=user_reason,
         navigation_target="/home")
 
-        ActivityLog.objects.create(
+        create_activity_log(
         user=target_user,
         action="MEMBER_REMOVED" if is_kicked else "MEMBER_LEFT",
         action_id=project.id,
@@ -248,7 +257,7 @@ def notify_project_manager_on_leave(sender, instance, **kwargs):
                     navigation_target=f"/workspace_details/{project.id}"
         )
 
-            ActivityLog.objects.create(
+            create_activity_log(
                 user=admin_user,
                 action="MEMBER_REMOVED" if is_kicked else "MEMBER_LEFT",
                 action_id=project.id,
@@ -258,7 +267,14 @@ def notify_project_manager_on_leave(sender, instance, **kwargs):
                 "reason": manager_reason,
                 "is_by_admin": is_kicked}
                     )
-
+"""
+if remaining_managers.exists():
+        # هناك مشرفون آخرون، لا داعي لإخافة الأدمن
+        message = f"المدير {instance.user.username} غادر المشروع، لكن لا يزال هناك {remaining_managers.count()} مشرفون آخرون يتابعون العمل."
+    else:
+        # فعلاً لا يوجد مشرفون! الأدمن يجب أن يتدخل
+        message = "تنبيه خطير: غادر آخر مدير للمشروع! المشروع الآن بدون مشرف."
+"""
 
 
 
@@ -283,13 +299,13 @@ def notify_managers_on_account_deletion(sender, instance, **kwargs):
                 navigation_target=f"/workspace_details/{current_workspace.id}"
             )
 
-            ActivityLog.objects.create(
+            create_activity_log(
                 user=ws_admin.user,
                 action="ACCOUNT_PURGED",
                 action_id=current_workspace.id,
                 changes={
                     "subject_name": instance.username,
-                    "target_title": current_workspace.name,  # الهدف هنا هو اسم الفضاء
+                    "target_title": current_workspace.name,
                     "reason": f"The account of user '{instance.username}' was deleted from the system, removing them from the workspace.",
                     "is_by_admin": False
                 }
@@ -339,10 +355,8 @@ def update_project_status_on_task_change(sender, instance, **kwargs):
         project.save()
 
     elif project.status == 'on_going':
-        total_tasks = project.task_set.count()
-
-        completed_tasks = project.task_set.filter(status='done').count()
-
+        total_tasks = project.tasks.count()
+        completed_tasks = project.tasks.filter(status='DONE').count()
         if total_tasks > 0 and total_tasks == completed_tasks:
             project.status = 'completed'
             project.save()

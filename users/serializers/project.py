@@ -28,11 +28,13 @@ class ProjectSerializer(serializers.ModelSerializer):
                 raise WorkspaceAccessDenied
             return value
 
+
         @extend_schema_field(serializers.ListSerializer(child=serializers.DictField(child=serializers.CharField())))
         def get_members(self, obj):
             project_roles = ProjectRole.objects.filter(project=obj).select_related('user')
             request = self.context.get('request')
             members_list = []
+
 
             for pr in project_roles:
                 user = pr.user
@@ -41,6 +43,7 @@ class ProjectSerializer(serializers.ModelSerializer):
                     avatar_url = user.avatar.url
                     if request:
                         avatar_url = request.build_absolute_uri(avatar_url)
+
 
                 members_list.append({
                     'id': user.id,
@@ -56,11 +59,14 @@ class ProjectSerializer(serializers.ModelSerializer):
 
 class ProjectMemberRoleSerializer(serializers.ModelSerializer):
 
+    is_owner = serializers.SerializerMethodField()
     user_id = serializers.IntegerField(source='user.id')
 
     class Meta:
         model = ProjectRole
-        fields = ['user_id', 'role']
+        fields = ['user_id', 'is_owner']
+    def get_is_owner(self, obj):
+            return obj.role == 'OWNER'
 
 
 class ProjectCreateSerializer(serializers.ModelSerializer):
@@ -76,10 +82,12 @@ class ProjectCreateSerializer(serializers.ModelSerializer):
             raise ProjectNotMember
         return value
 
+
+
     def create(self, validated_data):
         members_data = validated_data.pop('members_with_roles', [])
-
         project = Project.objects.create(**validated_data)
+
 
         for member_item in members_data:
             user_id = member_item['user_id']

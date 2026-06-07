@@ -26,3 +26,4 @@ from .project import (
 from .notifications import NotificationSerializer
 from .invitation import InvitationSerializer
 from .task import TaskSerializer,TaskCreateUpdateSerializer,ManagerReportReviewSerializer
+from .report import TechnicalReportSerializer ,RequestFormSerializer,BugReportSerializer

@@ -64,7 +64,6 @@ def RequestImage(instance, filename):
         return "req/imgs_{0}/{1}".format(instance.user.id,filename)
 
 
-
 class TimeStampedModel(models.Model):
         created_at = models.DateTimeField(auto_now_add=True)
         updated_at = models.DateTimeField(auto_now=True)
@@ -72,11 +71,9 @@ class TimeStampedModel(models.Model):
         class Meta:
                 abstract = True
 
-
 class Members(models.Model):
         name= models.CharField(max_length=20, blank=True)
         position= models.CharField(max_length=20, blank=True)
-
 
 class WorkSpace(TimeStampedModel):
 
@@ -90,9 +87,10 @@ class WorkSpace(TimeStampedModel):
                         models.Index(fields=['creator']),
                         models.Index(fields=['name']),
                 ]
+
 class WorkSpaceMember(models.Model):
         ROLE_CHOICES = [
-        ('ADMIN', 'Admin '), ('DEV', 'Developer'),('EMPLOYEE', 'employee'),('MANAGER','Manager') ]
+        ('ADMIN', 'Admin '),('EMPLOYEE', 'employee'),('MANAGER','Manager') ]
         role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='EMPLOYEE')
         user = models.ForeignKey(User, on_delete=models.CASCADE)
         workspace = models.ForeignKey(WorkSpace, on_delete=models.CASCADE)
@@ -124,6 +122,7 @@ class Project(TimeStampedModel):
                         models.Index(fields=["status"]),
                         models.Index(fields=["deadline"]),
                 ]
+
 class ProjectRole(models.Model):
         ROLE_CHOICES = [
         ('ADMIN', 'Admin '), ('DEV', 'Developer'),('EMPLOYEE', 'employee'),('MANAGER','Manager') ]
@@ -138,6 +137,7 @@ class ProjectRole(models.Model):
                 models.Index(fields=['user']),
                 models.Index(fields=['role']),
         ]
+
 class Task(TimeStampedModel):
         STATUS_CHOICES = [
                 ('UNASSIGNED', 'Unassigned'),
@@ -155,7 +155,7 @@ class Task(TimeStampedModel):
 
         creator = models.ForeignKey(User, on_delete=models.CASCADE, related_name="created_tasks")
         project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='tasks')
-        priority = models.CharField(max_length=1, choices=PRIORITY_CHOICES, default='M')
+        priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='M')
         status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='TODO')
         title = models.CharField(max_length=200)
         description = models.TextField()
@@ -166,7 +166,7 @@ class Task(TimeStampedModel):
         link = models.URLField(max_length=500, null=True, blank=True)
         due_date = models.DateTimeField()
         assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_tasks')
-        supervisor = models.ForeignKey(User, on_delete=models.SET(get_default_user), related_name='supervised_tasks')
+        supervisors = models.ManyToManyField(User, related_name='supervised_tasks')
 
         class Meta:
                 indexes = [
@@ -219,8 +219,8 @@ class TechnicalReportForm(TimeStampedModel):
 
         class Meta:
                 indexes = [
-        models.Index(fields=['user']),
-        models.Index(fields=['status']),]
+                models.Index(fields=['user']),
+                models.Index(fields=['status']),]
                 ordering = ['-created_at']
 
 
@@ -241,6 +241,7 @@ class RequestForm(TimeStampedModel):
         ('PENDING', 'Pending'),
         ('APPROVED', 'Approved'),
         ('REJECTED', 'Rejected'), ]
+
         user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='requests')
         request_type = models.CharField(max_length=20, choices=REQUEST_TYPES, default='OTHER')
         priority = models.CharField(max_length=10, choices=PRIORITY_LEVELS, default='NORMAL')
@@ -254,9 +255,9 @@ class RequestForm(TimeStampedModel):
         time=models.DateTimeField()
         class Meta:
                 indexes = [
-        models.Index(fields=['user']),
-        models.Index(fields=['project']),
-        models.Index(fields=['status']),]
+                models.Index(fields=['user']),
+                models.Index(fields=['project']),
+                models.Index(fields=['status']),]
                 ordering = ['-created_at']
 
 
@@ -282,11 +283,13 @@ class BugReportForm(TimeStampedModel):
         file = models.FileField(upload_to=BugReportPath, blank=True, null=True)
         image=models.ImageField(upload_to=BugReportImage,null=True,blank=True)
         result=models.TextField(null=True,blank=True)
+
         class Meta:
                 indexes = [
-        models.Index(fields=['user']),
-        models.Index(fields=['project']),
-        models.Index(fields=['status']),]
+                        models.Index(fields=['user']),
+                        models.Index(fields=['project']),
+                        models.Index(fields=['status']),
+                ]
                 ordering = ['-created_at']
 
 
@@ -297,8 +300,8 @@ class Invitation(TimeStampedModel):
         ('ADMIN', 'Admin'),
         ('DEV', 'Developer'),
         ('EMPLOYEE', 'Employee'),
-        ('MANAGER', 'Manager'),
-]
+        ('MANAGER', 'Manager'),]
+
         STATUS_CHOICES = [
         ('PENDING', 'Pending'),
         ('ACCEPTED', 'Accepted'),
@@ -309,7 +312,7 @@ class Invitation(TimeStampedModel):
         receiver_email = models.EmailField()
         workspace = models.ForeignKey(WorkSpace, on_delete=models.CASCADE, null=False, blank=True)
         project = models.ForeignKey(Project, on_delete=models.CASCADE, null=True, blank=True)
-        role = models.CharField(max_length=20,   choices=ROLE_CHOICES ,default='EMPLOYEE')
+        role = models.CharField(max_length=20,null=True,   choices=ROLE_CHOICES ,default='EMPLOYEE')
         status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='PENDING')
 
         class Meta:
@@ -319,7 +322,6 @@ class Invitation(TimeStampedModel):
                         models.Index(fields=['project']),
                         models.Index(fields=['status']),
                 ]
-
                 ordering = ['-created_at']
 
 
@@ -331,7 +333,10 @@ class Notification(TimeStampedModel):
         ('SYSTEM_ALERT', 'System Alert'),
         ('COMMENT_ADDED', 'New Comment'),
         ('REPORT_REJECTED', 'Report Rejected'),
-        ('REPORT_APPROVED', 'Report Approved'),
+        ('REPORT_SUBMITTED', 'Report Submitted'),
+        ('INVITATION_RECEIVED', 'Invitation Received'),
+        ('INVITATION_ACCEPTED', 'Invitation Accepted'),
+        ('INVITATION_REJECTED', 'Invitation Rejected'),
         ]
         recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
         notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES, default='SYSTEM_ALERT')
@@ -351,7 +356,21 @@ class ActivityLog(TimeStampedModel):
         ('MEMBER_LEFT', 'User left from Workspace'),
         ('ACCOUNT_PURGED', 'Account Deleted'),
         ('GENERAL_UPDATE','General update'),
-        ('REPORT_REVIEWED','rerport reviewde'),
+        ('REPORT_REVIEWED', 'Report Reviewed'),
+        ('INVITATION_SENT', 'Invitation Sent'),
+        ('INVITATION_ACCEPTED', 'Invitation Accepted'),
+        ('INVITATION_REJECTED', 'Invitation Rejected'),
+
+        ('REQUEST_CREATED', 'Request Created'),
+        ('REQUEST_UPDATED', 'Request Updated'),
+        ('REQUEST_DELETED', 'Request Deleted'),
+        ('REQUEST_REVIEWED', 'Request Reviewed'),
+
+        ('REPORT_DRAFT_CREATED', 'Report Draft Created'),
+        ('REPORT_DRAFT_UPDATED', 'Report Draft Updated'),
+        ('REPORT_DELETED', 'Report Deleted'),
+        ('REPORT_SUBMITTED', 'Report Submitted'),
+        ('ROLE_UPDATED','ROLE_UPDATED')
 
         ]
         user=models.ForeignKey(User,on_delete=models.CASCADE)

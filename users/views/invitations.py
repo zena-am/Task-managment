@@ -1,23 +1,28 @@
 from rest_framework import viewsets, mixins, permissions, status
-from rest_framework.decorators import action
+from rest_framework.decorators import APIView, action
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from drf_spectacular.utils import extend_schema
-from users.errors.exceptions  import (WorkspaceNotFound,  ProjectNotFound,  EmailAndWorkspaceRequired, ProjectIdRequired, InvitationAlreadyAccepted,InvitationForbidden,InvitationRejectForbidden,
-)
+from users.errors.exceptions  import (WorkspaceNotFound,  ProjectNotFound,  EmailAndWorkspaceRequired, ProjectIdRequired, InvitationAlreadyAccepted,InvitationForbidden,InvitationRejectForbidden,)
 from users.errors.exceptions import ProjectNotFound
+from users.permissions import IsTeamManager, IsWorkspaceOwnerOrReadOnly
+from rest_framework.permissions import IsAuthenticated
 from users.serializers import task, user
+from users.services.invitationsService import InvitationService
 from ..models import Project
 from ..models import Invitation, WorkSpaceMember, ProjectRole,WorkSpace
 from ..serializers import InvitationSerializer
 from ..utils import notify_existing_user, notify_new_user
+from django.shortcuts import get_object_or_404
+from rest_framework.pagination import PageNumberPagination
 
 @extend_schema(tags=['دعوة أعضاء'])
 class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixins.CreateModelMixin,viewsets.GenericViewSet ):
+    pagination_class = PageNumberPagination
     queryset = Invitation.objects.all()
     serializer_class = InvitationSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         return Invitation.objects.filter(receiver_email=self.request.user.email)
@@ -43,68 +48,16 @@ class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixin
         description="يقوم بإرسال دعوة للانضمام لمساحة عمل عبر البريد الإلكتروني. إذا كان المستخدم مسجلاً، يتم إخطاره، وإذا لم يكن، يتم إرسال دعوة خارجية له",
         responses={201: InvitationSerializer},
     )
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'],permission_classes=[ IsAuthenticated,IsWorkspaceOwnerOrReadOnly ])
     def send_workspace_invitation(self, request):
-        User = get_user_model()
-        email = request.data.get('email')
-        project_id = request.data.get('project_id')
-        role = request.data.get('role', 'MEMBER')
-        workspace_id = request.data.get('workspace_id')
-
-        if not email or not workspace_id:
-            raise EmailAndWorkspaceRequired()
-        try:
-            workspace = WorkSpace.objects.get(id=workspace_id)
-        except WorkSpace.DoesNotExist:
-            raise WorkspaceNotFound()
-
-        sender_name = request.user.get_full_name() or request.user.username
-        workspace_name = workspace.name
-
-        existing_invitation = Invitation.objects.filter(receiver_email=email, workspace_id=workspace_id, project_id=project_id).first()
-        if existing_invitation:
-            if existing_invitation.status == 'ACCEPTED':
-                raise InvitationAlreadyAccepted()
-            existing_invitation.status = 'PENDING'
-            existing_invitation.sender = request.user
-            existing_invitation.role = role
-            existing_invitation.save()
-            notify_existing_user(email, sender_name, workspace_name)
-            return Response({"detail": "Invitation resent and updated."})
-
-        receiver = User.objects.filter(email=email).first()
-
-
-        if receiver:
-            invitation = Invitation.objects.create(
-                sender=request.user,
-                receiver=receiver,
-                receiver_email=email,
-                project_id=project_id,
-                workspace_id=workspace_id,
-                role=role,
-                status='PENDING'
+        serializer = InvitationSerializer(data=request.data)
+        if serializer.is_valid():
+            result = InvitationService.send_workspace_invitation(
+                request.user,
+                serializer.validated_data
             )
-            notify_existing_user(email, sender_name, workspace_name)
-            return Response({"detail": "Invitation sent successfully."}, status=201)
-        else:
-
-            invitation = Invitation.objects.create(
-                sender=request.user,
-                receiver_email=email,
-                project_id=project_id,
-                workspace_id=workspace_id,
-                role=role,
-                status='PENDING'
-            )
-            notify_new_user(email, sender_name, workspace_name)
-
-        if user.id:
-            notify_existing_user(user.email, task.supervisor.get_full_name(), workspace.name)
-        else:
-            notify_new_user(user.email, task.supervisor.get_full_name(), workspace.name)
-            
-            return Response({"detail": "Invitation sent successfully."}, status=status.HTTP_201_CREATED)
+            return Response({"detail": result['detail']}, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 ########################################################################دعوات للمشروع
     @extend_schema(
         summary="  إرسال دعوة جديدة للمشروع",
@@ -238,9 +191,7 @@ class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixin
                 ProjectRole.objects.get_or_create(
                     project=invitation.project,
                     user=request.user,
-                    defaults={
-                        'role': 'DEV'
-                        }
+                    defaults={'role': invitation.role}
                 )
 
             invitation.status = 'ACCEPTED'
@@ -267,3 +218,38 @@ class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixin
         invitation.save()
 
         return Response({"detail": "Invitation rejected successfully."})
+###############################################################################################
+@extend_schema(tags=['Invitation Management'])
+
+class invitationsMembers(viewsets.ViewSet):
+    pagination_class = PageNumberPagination
+    permission_classes = [IsAuthenticated,IsTeamManager]
+
+
+    @extend_schema(summary="دعوات أعضاء المشروع")
+    @action(detail=False, methods=['get'], url_path='project/(?P<project_id>[^/.]+)')
+    def list_project_invitations(self, request, project_id=None):
+        status = request.query_params.get('status')
+        valid_statuses = ['PENDING', 'ACCEPTED', 'REJECTED']
+        if status and status not in valid_statuses:
+            return Response({"error": "Invalid status"}, status=400)
+        invitations = InvitationService.get_all_invitations(user=request.user,project_id=project_id,status=status)
+        serializer = InvitationSerializer(invitations, many=True)
+        return Response(serializer.data)
+
+
+    @extend_schema(summary="دعوات أعضاء الفضاء")
+    @action(detail=False, methods=['get'], url_path='workspace/(?P<workspace_id>[^/.]+)')
+    def list_workspace_invitations(self, request, workspace_id=None):
+        status = request.query_params.get('status')
+        valid_statuses = ['PENDING', 'ACCEPTED', 'REJECTED']
+        if status and status not in valid_statuses:
+            return Response({"error": "Invalid status"}, status=400)
+        invitations = InvitationService.get_all_invitations(workspace_id=workspace_id,user=request.user,status=status)
+
+        serializer = InvitationSerializer(invitations, many=True)
+        return Response(serializer.data)
+
+
+
+

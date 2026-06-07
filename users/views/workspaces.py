@@ -1,35 +1,27 @@
-from rest_framework import viewsets, permissions
-from django.contrib.auth import get_user_model
 from drf_spectacular.utils import extend_schema
-from ..models import WorkSpace, WorkSpaceMember, Invitation
+from django.shortcuts import get_object_or_404
+from rest_framework import viewsets, permissions, status
+from rest_framework.response import Response
+
+from users.services.WorkspaceService import WorkspaceServices
+from ..models import User, WorkSpace, WorkSpaceMember, Invitation
 from ..serializers import WorkSpaceSerializer,WorkSpaceCreateSerializer
-from ..permissions import IsCreatorOrReadOnly
-from ..utils import notify_existing_user, notify_new_user
+from ..permissions import  IsProfileComplete, IsWorkspaceOwnerOrReadOnly
 from users.views.invitations import InvitationViewSet
 from django.db.models import Case, When, Value, BooleanField
 from drf_spectacular.utils import extend_schema, extend_schema_view
-from rest_framework.decorators import action
-from users.errors.exceptions import WorkspaceCannotLeaveAsCreator
+from rest_framework.decorators import APIView, action
 
 @extend_schema_view(
+        tags=['الفضاءات'],
         list=extend_schema(tags=['فضاءات العمل'], summary="عرض فضاءات العمل الخاصة بالمستخدم مرتبة حسب التثبيت"),
         create=extend_schema(tags=['فضاءات العمل'], summary="إنشاء فضاء عمل جديد"),
         retrieve=extend_schema(tags=['فضاءات العمل'], summary="جلب تفاصيل فضاء عمل محدد"),
-        update=extend_schema(tags=['فضاءات العمل'], summary="(للمدير)تحديث  كامل لفضاء العمل", description="هذا الاخيار يجب ان يظهر للمدير فقط"),
+        update=extend_schema(tags=['فضاءات العمل'], summary="(للمالك)تحديث  كامل لفضاء العمل", description="هذا الاخيار يجب ان يظهر للمدير فقط"),
         destroy=extend_schema(tags=['فضاءات العمل'], summary="(للمدير)حذف فضاء العمل", description="هذا الاخيار يجب ان يظهر للمدير فقط")
 )
 class WorkspaceViewSet(viewsets.ModelViewSet):
-        permission_classes = [permissions.IsAuthenticated, IsCreatorOrReadOnly]
-
-        def get_queryset(self):
-                user = self.request.user
-                return WorkSpace.objects.filter(members=user).annotate(
-                user_pinned=Case(
-                        When(workspacemember__user=user, workspacemember__is_pinned=True, then=Value(True)),
-                        default=Value(False),
-                        output_field=BooleanField(),
-                )
-        ).order_by('-user_pinned', '-id').distinct()
+        permission_classes = [permissions.IsAuthenticated, IsWorkspaceOwnerOrReadOnly]
         def get_serializer_class(self):
 
                 if self.action in ['create', 'update', 'partial_update']:
@@ -37,76 +29,89 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
 
                 return WorkSpaceSerializer
 
+        def get_queryset(self):
+                user = self.request.user
+                return WorkspaceServices.get_user_workspaces(user)
+
         def perform_update(self, serializer):
-                                workspace = serializer.save()
-                                self.handle_invitations(workspace)
+                WorkspaceServices.update_workspace(
+                serializer=serializer,
+                user=self.request.user,
+                data=self.request.data)
+
 
         def perform_create(self, serializer):
-                workspace = serializer.save(creator=self.request.user)
+                WorkspaceServices.create_workspace(
+        serializer=serializer,
+        user=self.request.user,
+        data=self.request.data)
 
-                WorkSpaceMember.objects.get_or_create(
-                user=self.request.user,
-                workspace=workspace,
-                role='ADMIN',
-                defaults={'is_pinned': True}
-                )
-                if self.request.data.get('member_emails') :
 
-                        invitation_view = InvitationViewSet()
-                        invitation_view.request = self.request
 
-                        invitation_view.request.data['project_id'] = workspace.project.id
-                        invitation_view.request.data['workspace_id'] = workspace.id
 
-                        invitation_view.send_project_invitation(invitation_view.request)
-
+class TogglePinWorkspaceAPIView(APIView):
+        permission_classes = [permissions.IsAuthenticated]
         @extend_schema(
         tags=['فضاءات العمل'],
         summary="(للموظف) تثبيت أو إلغاء تثبيت فضاء العمل",
         description="تسمح للموظف العادي بتثبيت الفضاء في أعلى قائمته الشخصية أو إلغاء تثبيته")
-        @action(detail=True, methods=['post'], url_path='toggle_pin')
-        def toggle_pin(self, request, pk=None):
-                workspace = self.get_object()
-
-                member_setting = get_object_or_404(WorkSpaceMember, user=request.user, workspace=workspace)
-
-                member_setting.is_pinned = not member_setting.is_pinned
-                member_setting.save()
-                return Response(
-                {
-                        "message": f"Workspace pin status updated successfully.",
-                        "is_pinned": member_setting.is_pinned
-                },
-                status=status.HTTP_200_OK
+        def post(self, request, workspace_id):
+                workspace = get_object_or_404(
+                WorkSpace,
+                id=workspace_id,
+                members=request.user
                 )
 
+                result = WorkspaceServices.toggle_pin(
+                user=request.user,
+                workspace=workspace
+                )
+
+                return Response(result, status=status.HTTP_200_OK)
+
+class LeaveWorkspaceAPIView(APIView):
+        permission_classes = [permissions.IsAuthenticated]
         @extend_schema(
                 tags=['فضاءات العمل'],
                 summary="(للموظف) مغادرة فضاء العمل",
                 description="تسمح للموظف العادي بحذف نفسه ومغادرة فضاء العمل إذا لم يعد من الفريق، ولا يسمح للمالك بمغادرة فضائه بهذه الطريقة"
         )
-        @action(detail=True, methods=['delete'], url_path='leave')
-        def leave_workspace(self, request, pk=None):
-                workspace = self.get_object()
-
-                if workspace.creator == request.user:
-                        raise WorkspaceCannotLeaveAsCreator
-
-                member = get_object_or_404(WorkSpaceMember, user=request.user, workspace=workspace)
-                member.delete()
-
-                return Response(
-                {"message": f"You have successfully left the workspace: '{workspace.name}'."},
-                status=status.HTTP_200_OK
+        def delete(self, request, workspace_id):
+                workspace = get_object_or_404(
+                WorkSpace,
+                id=workspace_id,
+                members=request.user
                 )
+
+                result = WorkspaceServices.leave_workspace(
+                user=request.user,
+                workspace=workspace
+                )
+
+                return Response(result, status=status.HTTP_200_OK)
+
+
+
+        @extend_schema(summary="نقل ملكية الفضاء")
+        @action(detail=True, methods=['post'], url_path='transfer-ownership')
+        def transfer_ownership(self, request, pk=None):
+                workspace = self.get_object()
+                new_owner_id = request.data.get('new_owner_id')
+
+                try:
+                        new_owner = User.objects.get(id=new_owner_id)
+                        WorkspaceServices.transfer_ownership(workspace, new_owner, request.user)
+                        return Response({"message": "تم نقل الملكية بنجاح"})
+                except User.DoesNotExist:
+                        return Response({"error": "المستخدم غير موجود"}, status=404)
+                except Exception as e:
+                        return Response({"error": str(e)}, status=400)
+
+
+
 
 
 """
-
-
-
-
-
         def handle_invitations(self, workspace):
                 from django.contrib.auth import get_user_model
                 User = get_user_model()

@@ -6,11 +6,43 @@ from ..models import Project, ProjectRole, User, WorkSpaceMember, Invitation
 from ..serializers import ProjectSerializer,ProjectCreateSerializer
 from ..permissions import IsProjectManagerOrReadOnly
 from ..utils import notify_existing_user, notify_new_user
+from drf_spectacular.utils import extend_schema, extend_schema_view
 
-
+@extend_schema_view(
+    list=extend_schema(
+        tags=['المشاريع'],
+        summary="جلب قائمة المشاريع",
+        description="يعيد جميع المشاريع التي يملك المستخدم الحالي صلاحية الوصول إليها"
+    ),
+    retrieve=extend_schema(
+        tags=['المشاريع'],
+        summary="جلب تفاصيل مشروع",
+        description="يعيد تفاصيل مشروع محدد مع بياناته الأساسية"
+    ),
+    create=extend_schema(
+        tags=['المشاريع'],
+        summary="إنشاء مشروع جديد",
+        description="يقوم بإنشاء مشروع جديد داخل فضاء العمل المحدد"
+    ),
+    update=extend_schema(
+        tags=['المشاريع'],
+        summary="تعديل مشروع",
+        description="تعديل بيانات مشروع موجود"
+    ),
+    partial_update=extend_schema(
+        tags=['المشاريع'],
+        summary="تعديل جزئي لمشروع",
+        description="تحديث بعض بيانات المشروع فقط"
+    ),
+    destroy=extend_schema(
+        tags=['المشاريع'],
+        summary="حذف مشروع",
+        description="حذف مشروع من النظام"
+    ),
+)
 class ProjectViewSet(viewsets.ModelViewSet):
     User = get_user_model()
-    permission_classes = [permissions.IsAuthenticated, IsProjectManagerOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated, IsProjectManagerOrReadOnly,IsProjectManagerOrReadOnly]
 
 
     def get_serializer_class(self):
