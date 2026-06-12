@@ -21,40 +21,41 @@ class ProjectSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['created_at']
 
-
-        def validate_workspace(self, value):
-            user = self.context['request'].user
-            if not value.members.filter(id=user.id).exists():
-                raise WorkspaceAccessDenied
-            return value
-
-
-        @extend_schema_field(serializers.ListSerializer(child=serializers.DictField(child=serializers.CharField())))
-        def get_members(self, obj):
-            project_roles = ProjectRole.objects.filter(project=obj).select_related('user')
-            request = self.context.get('request')
-            members_list = []
+    def get_members(self, obj):
+        return [user.username for user in obj.members.all()]
+    def validate_workspace(self, value):
+        user = self.context['request'].user
+        if not value.members.filter(id=user.id).exists():
+            raise WorkspaceAccessDenied
+        return value
 
 
-            for pr in project_roles:
-                user = pr.user
-                avatar_url = None
-                if user.avatar:
-                    avatar_url = user.avatar.url
-                    if request:
-                        avatar_url = request.build_absolute_uri(avatar_url)
+    @extend_schema_field(serializers.ListSerializer(child=serializers.DictField(child=serializers.CharField())))
+    def get_members(self, obj):
+        project_roles = ProjectRole.objects.filter(project=obj).select_related('user')
+        request = self.context.get('request')
+        members_list = []
 
 
-                members_list.append({
-                    'id': user.id,
-                    'username': user.username,
-                    'first_name': user.first_name,
-                    'last_name': user.last_name,
-                    'role': pr.role,
-                    'avatar': avatar_url,
-                    'date_joined': pr.date_joined
-                })
-            return members_list
+        for pr in project_roles:
+            user = pr.user
+            avatar_url = None
+            if user.avatar:
+                avatar_url = user.avatar.url
+                if request:
+                    avatar_url = request.build_absolute_uri(avatar_url)
+
+
+            members_list.append({
+                'id': user.id,
+                'username': user.username,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'role': pr.role,
+                'avatar': avatar_url,
+                'date_joined': pr.date_joined
+            })
+        return members_list
 
 
 class ProjectMemberRoleSerializer(serializers.ModelSerializer):

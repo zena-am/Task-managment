@@ -13,6 +13,7 @@ from users.models import User
 
 
 class TopbarListSerializer(serializers.ModelSerializer):
+        unread_notifications_count = serializers.SerializerMethodField()
         class Meta:
             model = User
             fields = ['id', 'username', 'avatar', 'unread_notifications_count']

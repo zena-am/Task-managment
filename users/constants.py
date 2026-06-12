@@ -1,9 +1,20 @@
 from users.models import ActivityLog, Notification
 
 
-def create_activity_log(user, action, action_id, subject_name, target_title, reason=None, is_by_admin=False):
+def create_activity_log(user, action, action_id, changes=None):
+    if changes is None:
+            changes = {}
+
     return ActivityLog.objects.create(
         user=user,
+        action=action,
+        action_id=action_id,
+        changes=changes,
+    )
+    """
+    def create_activity_log(user, action, action_id, subject_name, target_title, reason=None, is_by_admin=False,changes=None):
+
+    user=user,
         action=action,
         action_id=action_id,
         changes={
@@ -12,9 +23,11 @@ def create_activity_log(user, action, action_id, subject_name, target_title, rea
             "reason": reason,
             "is_by_admin": is_by_admin
         }
-    )
+    """
 
-def create_notification( recipient=None, notification_type=None, title=None, message=None):
+
+
+def create_notification( recipient=None, notification_type=None, title=None, message=None,navigation_target=None):
     if not all([recipient, notification_type, title, message]):
             return None
     if recipient and notification_type and title and message:
@@ -22,5 +35,6 @@ def create_notification( recipient=None, notification_type=None, title=None, mes
             recipient=recipient,
             notification_type=notification_type,
             title=title,
-            message=message
+            message=message,
+            navigation_target=navigation_target,
         )

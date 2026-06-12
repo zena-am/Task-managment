@@ -33,7 +33,8 @@ class TaskService:
 
         return task
     @staticmethod
-    def create_task(self, serializer):
+    def create_task(user, serializer):
+
         assigned_user = serializer.validated_data.get('assigned_to')
         project = serializer.validated_data.get('project')
 
@@ -41,33 +42,29 @@ class TaskService:
             initial_status = 'TODO'
         else:
             initial_status = 'UNASSIGNED'
+        task = serializer.save(creator=user,status=initial_status)
 
-        task =  serializer.save(
-            creator=self.request.user,
-            status=initial_status
-        )
-        task.supervisors.add(self.request.user)
 
         is_project_member = True
         if assigned_user:
             is_project_member = ProjectRole.objects.filter(project=project,user=assigned_user).exists()
-        create_notification(
-        recipient=assigned_user,
-        notification_type="TASK_ASSIGNED",
-        title="مهمة جديدة",
-        message=f"قام {self.request.user.username} بإسناد مهمة جديدة لك: {task.title}",
-        navigation_target=f"/tasks/{task.id}")
+            create_notification(
+            recipient=assigned_user,
+            notification_type="TASK_ASSIGNED",
+            title="مهمة جديدة",
+            message=f"قام {user.username} بإسناد مهمة جديدة لك: {task.title}",
+            navigation_target=f"/tasks/{task.id}")
 
-        if not is_project_member:
-            InvitationService.send_project_invitation(
-                sender=self.request.user,
-                data={
-                    "project_id": task.project.id,
-                    "member_emails": [assigned_user.email],
-                    "role": "EMPLOYEE"
-                }
-            )
-        task.supervisors.add(self.request.user)
+            if not is_project_member:
+                InvitationService.send_project_invitation(
+                    sender=user,
+                    data={
+                        "project_id": task.project.id,
+                        "member_emails": [assigned_user.email],
+                        "role": "EMPLOYEE"
+                    }
+                )
+
 
         return task
 
@@ -94,9 +91,9 @@ class TaskService:
         if user != task.assigned_to and user !=  task.supervisors.filter(id=user.id).exists() and not is_project_admin:
             raise PermissionDeniedError()
             """
-        is_supervisor = task.supervisors.filter(id=user.id).exists()
+        # is_supervisor = task.supervisors.filter(id=user.id).exists()
 
-        if user != task.assigned_to and not is_supervisor and not is_project_admin:
+        if user != task.assigned_to  and not is_project_admin:
             raise PermissionDeniedError()
 
         if status_value == "INPROGRESS" and not task.start_time:
@@ -230,12 +227,12 @@ class TaskService:
 
         return task
 
-    def perform_update(self, serializer):
-        status = self.request.data.get('status')
-        instance = self.get_object()
-        if status == 'INPROGRESS' and not instance.start_time:
+    def perform_update(serializer, instance, user, status_value):
+        #status = user.requests.data.get('status')
+        # instance = user.get_object()
+        if status_value == 'INPROGRESS' and not instance.start_time:
             serializer.save(start_time=timezone.now())
-        elif status == 'REVIEW':
+        elif status_value == 'REVIEW':
             now = timezone.now()
             actual_dur = now - instance.start_time if instance.start_time else None
             serializer.save(end_time=now, actual_duration=actual_dur)

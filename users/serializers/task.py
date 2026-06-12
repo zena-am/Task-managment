@@ -72,7 +72,7 @@ class TaskSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'project', 'status', 'status_display', 'priority', 'priority_display',
             'expected_duration', 'time_expected_hours', 'actual_duration', 'actual_duration_hours',
-            'start_time', 'end_time', 'link',
+            'start_time', 'end_time', 'link','due_date',
             'assigned_to', 'assigned_to_detail','supervisors_detail', 'supervisors',  'is_overdue','images','files'
         ]
 
@@ -121,21 +121,22 @@ class TaskSerializer(serializers.ModelSerializer):
                     projectrole__role='MANAGER'
                 ).values_list('id', flat=True)
 
+
 ###########################################################################################################
 
 
 
 class TaskCreateUpdateSerializer(serializers.ModelSerializer):
     image_files = serializers.ListField(child=serializers.ImageField(),write_only=True, required=False )
-
     document_files = serializers.ListField(child=serializers.FileField(),write_only=True, required=False )
+    due_date = serializers.DateTimeField(input_formats=["%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"])
 
     class Meta:
         model = Task
         fields = [
             'id', 'project', 'title', 'description', 'priority', 'status',
             'expected_duration', 'link',
-            'assigned_to', 'supervisors','image_files','document_files',
+            'assigned_to','image_files','document_files','due_date'
         ]
         read_only_fields = ['id']
 
@@ -152,7 +153,6 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
 
         task = Task.objects.create(
-            creator=request.user,
             **validated_data
         )
 

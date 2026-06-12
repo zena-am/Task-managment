@@ -166,7 +166,7 @@ class Task(TimeStampedModel):
         link = models.URLField(max_length=500, null=True, blank=True)
         due_date = models.DateTimeField()
         assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_tasks')
-        supervisors = models.ManyToManyField(User, related_name='supervised_tasks')
+        # supervisors = models.ManyToManyField(User, related_name='supervised_tasks')
 
         class Meta:
                 indexes = [

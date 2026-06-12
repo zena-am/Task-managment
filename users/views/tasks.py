@@ -24,6 +24,7 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiPara
 from drf_spectacular.types import OpenApiTypes
 from rest_framework.exceptions import ValidationError
 from rest_framework import serializers
+from rest_framework.parsers import MultiPartParser, FormParser
 
 User = get_user_model()
 
@@ -80,6 +81,7 @@ User = get_user_model()
 )
 class TaskView(viewsets.ModelViewSet):
     User = get_user_model()
+    parser_classes = (MultiPartParser, FormParser)
     permission_classes = [IsAuthenticated, TaskPermission]
 
     def get_serializer_class(self):
@@ -98,7 +100,7 @@ class TaskView(viewsets.ModelViewSet):
         return super().retrieve(request, *args, **kwargs)
 
     def perform_create(self, serializer):
-        TaskService.create_task(serializer, self.request.user)
+        TaskService.create_task(self.request.user, serializer)
 
     def perform_update(self, serializer):
         instance = self.get_object()
