@@ -1,6 +1,7 @@
 from rest_framework import viewsets, permissions
 from rest_framework.parsers import MultiPartParser, FormParser
 from users.permissions import  RequestFormPermission, TechnicalReportPermission
+from users.errors.messages.success import success_response
 from users.serializers.report import ManagerRequestReviewSerializer
 from ..models import ProjectRole, TechnicalReportForm, RequestForm, BugReportForm, Invitation
 from ..serializers import (TechnicalReportSerializer, RequestFormSerializer,BugReportSerializer, InvitationSerializer)
@@ -102,6 +103,75 @@ from drf_spectacular.types import OpenApiTypes
 class BaseSubmissionViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = (MultiPartParser, FormParser)
+
+    def _response_code_prefix(self):
+        return self.__class__.__name__.replace('ViewSet', '').upper()
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            paginated = self.paginator.get_paginated_response(serializer.data)
+            return Response(success_response(
+                message="Items retrieved successfully",
+                code="ITEMS_RETRIEVED",
+                data=paginated.data,
+            ), status=status.HTTP_200_OK)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(success_response(
+            message="List retrieved successfully",
+            code=f"{self._response_code_prefix()}_LIST_RETRIEVED",
+            data=serializer.data,
+        ), status=status.HTTP_200_OK)
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        return Response(success_response(
+            message="Item retrieved successfully",
+            code=f"{self._response_code_prefix()}_RETRIEVED",
+            data=serializer.data,
+        ), status=status.HTTP_200_OK)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        response_serializer = self.get_serializer(serializer.instance)
+        return Response(success_response(
+            message="Item created successfully",
+            code=f"{self._response_code_prefix()}_CREATED",
+            data=response_serializer.data,
+        ), status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        response_serializer = self.get_serializer(serializer.instance)
+        return Response(success_response(
+            message="Item updated successfully",
+            code=f"{self._response_code_prefix()}_UPDATED",
+            data=response_serializer.data,
+        ), status=status.HTTP_200_OK)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        object_id = instance.id
+        self.perform_destroy(instance)
+        return Response(success_response(
+            message="Item deleted successfully",
+            code=f"{self._response_code_prefix()}_DELETED",
+            data={"id": object_id},
+        ), status=status.HTTP_200_OK)
 
 class TechnicalReportViewSet(BaseSubmissionViewSet):
     permission_classes = [
@@ -385,7 +455,7 @@ class RequestFormViewSet(BaseSubmissionViewSet):
 ######################################################################################################
 class BugReportViewSet(BaseSubmissionViewSet):
 
-    permission_classes = [IsAuthenticated,RequestFormPermission]
+    permission_classes = [IsAuthenticated]
     queryset = BugReportForm.objects.all()
     serializer_class = BugReportSerializer
 

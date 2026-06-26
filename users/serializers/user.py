@@ -59,8 +59,8 @@ class ProjectMemberDetailSerializer(serializers.ModelSerializer):
         ]
     def get_can_delete(self, obj):
         request_user = self.context['request'].user
-        is_request_user_owner = ProjectRole.objects.filter(project=obj.project, user=request_user, role='OWNER').exists()
-        return is_request_user_owner
+        is_project_manager = ProjectRole.objects.filter(project=obj.project, user=request_user, role__in=['ADMIN', 'MANAGER']).exists()
+        return is_project_manager
 
     def get_role(self, obj):
         project_id = self.context.get('project_id')
@@ -74,7 +74,7 @@ class ProjectMemberDetailSerializer(serializers.ModelSerializer):
 
     def get_completed_tasks(self, obj):
         project_id = self.context.get('project_id')
-        return Task.objects.filter(project_id=project_id, assigned_to=obj.user, status='completed').count()
+        return Task.objects.filter(project_id=project_id, assigned_to=obj.user, status='DONE').count()
 
 
 ###########################################################################################################
@@ -105,7 +105,7 @@ class WorkSpaceMemberDetailSerializer(serializers.ModelSerializer):
     def get_role(self, obj):
         workspace_id = self.context.get('workspace_id')
         member_role = WorkSpaceMember.objects.filter(workspace_id=workspace_id, user=obj.user).first()
-        return  obj.role if member_role else 'EMPLOYEE'
+        return obj.role if member_role else 'MEMBER'
 
     def get_assigned_projects_count(self, obj):
         workspace_id = self.context.get('workspace_id')

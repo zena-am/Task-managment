@@ -1,5 +1,4 @@
 from rest_framework import permissions
-from users.serializers import project
 from .models import ProjectRole, WorkSpaceMember
 from rest_framework.permissions import BasePermission
 
@@ -65,7 +64,13 @@ class CanUpdateTaskStatus(permissions.BasePermission):
     message = "You can update only your assigned task status."
 
     def has_object_permission(self, request, view, obj):
-        return obj.assigned_to == request.user
+        is_assignee = obj.assigned_to == request.user
+        is_project_manager = ProjectRole.objects.filter(
+            project=obj.project,
+            user=request.user,
+            role__in=["MANAGER", "ADMIN"]
+        ).exists()
+        return is_assignee or is_project_manager
 
 
 class IsTeamManagerForProject(permissions.BasePermission):

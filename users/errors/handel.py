@@ -22,6 +22,7 @@ def custom_exception_handler(exc, context):
                 "success": False,
                 "code": exc.detail.get("code"),
                 "message": exc.detail.get("message"),
+                "data": None,
                 "errors": None
             },
             status=exc.status_code,
@@ -57,6 +58,7 @@ def custom_exception_handler(exc, context):
                 "success": False,
                 "code": "VALIDATION_ERROR",
                 "message": "Validation error",
+                "data": None,
                 "errors": response.data if response else None,
             },
             status=status.HTTP_400_BAD_REQUEST,
@@ -72,6 +74,7 @@ def custom_exception_handler(exc, context):
                 "success": False,
                 "code": "NOT_AUTHENTICATED",
                 "message": "Authentication required",
+                "data": None,
                 "errors": None,
             },
             status=status.HTTP_401_UNAUTHORIZED,
@@ -87,6 +90,7 @@ def custom_exception_handler(exc, context):
                 "success": False,
                 "code": "PERMISSION_DENIED",
                 "message": "Permission denied",
+                "data": None,
                 "errors": None,
             },
             status=status.HTTP_403_FORBIDDEN,
@@ -104,6 +108,7 @@ def custom_exception_handler(exc, context):
                 "message": response.data.get("detail", "Something went wrong")
                 if isinstance(response.data, dict)
                 else "Something went wrong",
+                "data": None,
                 "errors": None,
             },
             status=response.status_code,
@@ -120,6 +125,7 @@ def custom_exception_handler(exc, context):
             "success": False,
             "code": "SERVER_ERROR",
             "message": "Internal server error",
+            "data": None,
             "errors": None,
         },
         status=status.HTTP_500_INTERNAL_SERVER_ERROR,

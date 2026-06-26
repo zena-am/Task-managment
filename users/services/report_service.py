@@ -1,50 +1,12 @@
-from rest_framework.exceptions import PermissionDenied
-from users.constants import create_activity_log
-from users.models import Notification
 from rest_framework.exceptions import PermissionDenied, ValidationError
+
+from users.constants import create_activity_log
 from users.models import Notification, ProjectRole
 
 
 
 
 class ReportService:
-    """
-    @staticmethod
-    def submit_technical_report(serializer, user):
-        task = serializer.validated_data.get("task")
-
-        if task.assigned_to != user:
-            raise PermissionDenied(
-                "You can only submit a technical report for tasks assigned to you."
-            )
-
-        if task.status != "INPROGRESS":
-            raise PermissionDenied(
-                "You can only submit a report for tasks in progress."
-            )
-
-        report = serializer.save(
-            user=user,
-            status="SUBMITTED"
-        )
-
-        task.status = "REVIEW"
-        task.save(update_fields=["status", "updated_at"])
-
-        for supervisor in task.supervisors.all():
-            Notification.objects.create(
-                recipient=supervisor,
-                notification_type="REPORT_SUBMITTED",
-                title="New Technical Report Submitted",
-                message=(
-                    f"Employee {user.get_full_name() or user.username} "
-                    f"has submitted a technical report for the task '{task.title}'."
-                ),
-                navigation_target=f"/task_details/{task.id}"
-            )
-
-        return report
-    """
 
     @staticmethod
     def update_technical_report(report, serializer, user):
@@ -52,7 +14,7 @@ class ReportService:
 
         create_activity_log(
             user=user,
-            action="REPORT_UPDATED",
+            action="REPORT_DRAFT_UPDATED",
             action_id=report.id,
             changes={
                 "subject_name": user.username,
@@ -270,7 +232,8 @@ class FormService:
     @staticmethod
     def review_request_form(request_form, manager_user, status_value, manager_feedback=None):
         is_manager = ProjectRole.objects.filter(project=request_form.project,user=manager_user,role__in=["ADMIN", "MANAGER"]).exists()
-
+        if not is_manager:
+            raise PermissionDenied("You are not allowed to review this request.")
 
         if request_form.status != "PENDING":
             raise ValidationError(

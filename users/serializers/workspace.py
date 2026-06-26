@@ -205,10 +205,10 @@ class WorkSpaceCreateSerializer (serializers.ModelSerializer):
                 user_id = member_item['user_id']
                 role = member_item['role']
 
-                WorkSpaceMember.objects.create(
+                WorkSpaceMember.objects.get_or_create(
                     workspace=workspace,
                     user_id=user_id,
-                    role=role
+                    defaults={'role': role}
                 )
 
             return workspace

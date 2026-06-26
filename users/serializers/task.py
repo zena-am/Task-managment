@@ -154,48 +154,48 @@ class TaskSerializer(serializers.ModelSerializer):
 
 
 class TaskCreateUpdateSerializer(serializers.ModelSerializer):
-    image_files = serializers.ListField(child=serializers.ImageField(),write_only=True, required=False )
-    document_files = serializers.ListField(child=serializers.FileField(),write_only=True, required=False )
-    due_date = serializers.DateTimeField(input_formats=["%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"])
+    image_files = serializers.ListField(child=serializers.ImageField(), write_only=True, required=False)
+    document_files = serializers.ListField(child=serializers.FileField(), write_only=True, required=False)
+    due_date = serializers.DateTimeField(
+        input_formats=["%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S%z", "iso-8601"]
+    )
 
     class Meta:
         model = Task
         fields = [
             'id', 'project', 'title', 'description', 'priority', 'status',
-            'expected_duration', 'link',
-            'assigned_to','image_files','document_files','due_date'
+            'expected_duration', 'link', 'assigned_to', 'image_files',
+            'document_files', 'due_date'
         ]
         read_only_fields = ['id']
 
-    def validate(self, attrs):
-        expected_duration = attrs.get('expected_duration')
+    def validate(self, data):
+        expected_duration = data.get('expected_duration')
         if expected_duration and expected_duration.total_seconds() <= 0:
-            raise serializers.ValidationError({"time_expected": "it must be greater than 0"})
-        return attrs
+            raise serializers.ValidationError({"expected_duration": "it must be greater than 0"})
 
+        project = data.get('project') or getattr(self.instance, 'project', None)
+        assignee = data.get('assigned_to')
+        if project and assignee:
+            is_member = ProjectRole.objects.filter(project=project, user=assignee).exists()
+            if not is_member:
+                raise serializers.ValidationError(
+                    {"assigned_to": "لا يمكن إسناد المهمة لهذا المستخدم لأنه ليس عضواً في هذا المشروع."}
+                )
+        return data
 
     def create(self, validated_data):
         image_files = validated_data.pop('image_files', [])
         document_files = validated_data.pop('document_files', [])
         request = self.context.get('request')
 
-        task = Task.objects.create(
-            **validated_data
-        )
+        task = Task.objects.create(**validated_data)
 
         for image in image_files:
-            TaskImage.objects.create(
-                task=task,
-                user=request.user,
-                image=image
-            )
+            TaskImage.objects.create(task=task, user=request.user, image=image)
 
         for file in document_files:
-            TaskFile.objects.create(
-                task=task,
-                user=request.user,
-                file=file
-            )
+            TaskFile.objects.create(task=task, user=request.user, file=file)
 
         return task
 
@@ -206,41 +206,15 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
 
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
-
         instance.save()
 
         for image in image_files:
-            TaskImage.objects.create(
-                task=instance,
-                user=request.user,
-                image=image
-            )
+            TaskImage.objects.create(task=instance, user=request.user, image=image)
 
         for file in document_files:
-            TaskFile.objects.create(
-                task=instance,
-                user=request.user,
-                file=file
-            )
+            TaskFile.objects.create(task=instance, user=request.user, file=file)
 
         return instance
-
-    def validate(self, data):
-            project = data.get('project')
-            assignee = data.get('assigned_to')
-            if project and assignee:
-                is_member = ProjectRole.objects.filter(
-                    project=project,
-                    user=assignee
-                ).exists()
-
-                if not is_member:
-                    raise serializers.ValidationError(
-                        {"assigned_to": "لا يمكن إسناد المهمة لهذا المستخدم لأنه ليس عضواً في هذا المشروع."}
-                    )
-            if data.get('assigned_to') and data.get('assigned_email'):
-                raise serializers.ValidationError("لا يمكن اختيار موظف وإدخال إيميل في نفس الوقت.")
-            return data
 #######################################################################################################
 class ManagerReportReviewSerializer(serializers.ModelSerializer):
         feedback_text = serializers.CharField(write_only=True, required=False, allow_blank=True)
@@ -304,7 +278,7 @@ class ProjectWithoutManagerSerializer(serializers.ModelSerializer):
         ]
 
     def get_members_count(self, obj):
-        return obj.project_roles.count()
+        return ProjectRole.objects.filter(project=obj).count()
 
     def get_tasks_count(self, obj):
         return obj.tasks.count()

@@ -1,7 +1,7 @@
+from django.db import transaction
 from django.db.models import Case, When, Value, BooleanField
 from django.shortcuts import get_object_or_404
-from django.db import transaction
-from users.errors.messages.success import success_response
+
 from users.models import ProjectRole, Task, WorkSpace, WorkSpaceMember
 from users.errors.exceptions import WorkspaceCannotLeaveAsCreator
 from users.services.invitationsService import InvitationService
@@ -15,71 +15,54 @@ class WorkspaceServices:
                 When(
                     workspacemember__user=user,
                     workspacemember__is_pinned=True,
-                    then=Value(True)
+                    then=Value(True),
                 ),
                 default=Value(False),
                 output_field=BooleanField(),
             )
         ).order_by('-user_pinned', '-id').distinct()
 
-
     @staticmethod
     def create_workspace(serializer, user, data):
         workspace = serializer.save(creator=user)
 
-        WorkSpaceMember.objects.get_or_create(user=user,
+        WorkSpaceMember.objects.get_or_create(
+            user=user,
             workspace=workspace,
-            defaults={
-                "role": "ADMIN",
-                "is_pinned":False
-            }
+            defaults={"role": "ADMIN", "is_pinned": False},
         )
 
         invitations_result = WorkspaceServices._send_workspace_invitations(
             sender=user,
             workspace=workspace,
-            data=data
+            data=data,
         )
 
-        return {
-            "workspace": workspace,
-            "invitations_result": invitations_result
-        }
+        return {"workspace": workspace, "invitations_result": invitations_result}
 
     @staticmethod
     def update_workspace(serializer, user, data):
-        member_emails = serializer.validated_data.get("member_emails")
         workspace = serializer.save()
-        invitations_result = None
+        invitations_result = WorkspaceServices._send_workspace_invitations(
+            sender=user,
+            workspace=workspace,
+            data=data,
+        )
 
-
-        if member_emails:
-            invitations_result = WorkspaceServices._send_workspace_invitations(
-                sender=user,
-                workspace=workspace,
-                data=data
-            )
-
-        return {
-            "workspace": workspace,
-            "invitations_result": invitations_result
-        }
-
+        return {"workspace": workspace, "invitations_result": invitations_result}
 
     @staticmethod
     def toggle_pin(user, workspace):
         member_setting = get_object_or_404(
             WorkSpaceMember,
             user=user,
-            workspace=workspace
+            workspace=workspace,
         )
 
         member_setting.is_pinned = not member_setting.is_pinned
-        member_setting.save()
+        member_setting.save(update_fields=['is_pinned'])
 
-        return {
-            "is_pinned": member_setting.is_pinned
-}
+        return {"is_pinned": member_setting.is_pinned}
 
     @staticmethod
     def leave_workspace(user, workspace):
@@ -89,97 +72,85 @@ class WorkspaceServices:
         member = get_object_or_404(
             WorkSpaceMember,
             user=user,
-            workspace=workspace
+            workspace=workspace,
         )
 
         with transaction.atomic():
-            tasks = Task.objects.filter(
-            assigned_to=user,
-            project__workspace=workspace
-        )
+            Task.objects.filter(
+                assigned_to=user,
+                project__workspace=workspace,
+            ).update(
+                assigned_to=None,
+                status="UNASSIGNED",
+            )
 
-            if tasks.exists():
-                tasks.update(
-                    assigned_to=None,
-                    status="UNASSIGNED"
-                )
+            ProjectRole.objects.filter(
+                project__workspace=workspace,
+                user=user,
+            ).delete()
 
-                ProjectRole.objects.filter(
-                    project__workspace=workspace,
-                    user=user
-                ).delete()
+            member.delete()
 
-                member.delete()
+        return {"workspace_id": workspace.id}
 
-        return {
-    "workspace_id": workspace.id
-}
-
+    @staticmethod
     def transfer_ownership(workspace, new_owner):
         old_owner = workspace.creator
 
-        workspace.creator = new_owner
-        workspace.save()
+        with transaction.atomic():
+            workspace.creator = new_owner
+            workspace.save(update_fields=['creator'])
 
-        WorkSpaceMember.objects.update_or_create(
-            workspace=workspace,
-            user=new_owner,
-            defaults={"role": "ADMIN"}
-        )
+            WorkSpaceMember.objects.update_or_create(
+                workspace=workspace,
+                user=new_owner,
+                defaults={"role": "ADMIN"},
+            )
 
-        WorkSpaceMember.objects.update_or_create(
-            workspace=workspace,
-            user=old_owner,
-            defaults={"role": "MEMBER"}
-        )
-        return {
-    "new_owner_id": new_owner.id
-}
+            WorkSpaceMember.objects.update_or_create(
+                workspace=workspace,
+                user=old_owner,
+                defaults={"role": "MEMBER"},
+            )
 
-
-
-
-
+        return {"new_owner_id": new_owner.id}
 
     @staticmethod
     def _send_workspace_invitations(sender, workspace, data):
         member_emails = WorkspaceServices._get_list_value(data, "member_emails")
-        role = WorkspaceServices._get_value(data, "role") or "EMPLOYEE"
+        receiver_emails = WorkspaceServices._get_list_value(data, "receiver_emails")
+        emails = receiver_emails or member_emails
 
-        results = []
+        if not emails:
+            return {"success": [], "errors": []}
 
-        for email in member_emails:
-            result = InvitationService.send_workspace_invitation(
-                sender=sender,
-                data={
-                    "email": email,
-                    "workspace_id": workspace.id,
-                    "role": role
-                }
-            )
-            results.append(result)
+        role = WorkspaceServices._get_value(data, "role") or "MEMBER"
 
-        return results
+        return InvitationService.send_workspace_invitation(
+            sender=sender,
+            data={
+                "receiver_emails": emails,
+                "workspace": workspace.id,
+                "role": role,
+            },
+        )
 
     @staticmethod
     def _get_value(data, key):
         if hasattr(data, "get"):
             return data.get(key)
-
         return None
 
     @staticmethod
     def _get_list_value(data, key):
         if hasattr(data, "getlist"):
-            return data.getlist(key)
+            values = data.getlist(key)
+            if values:
+                return values
 
         value = data.get(key) if hasattr(data, "get") else None
-
         if not value:
             return []
-
         if isinstance(value, list):
             return value
-
         return [value]
-

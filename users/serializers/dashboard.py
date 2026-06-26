@@ -31,7 +31,7 @@ class DashboardSerializer(serializers.Serializer):
     def _get_accessible_workspaces(self, user, selected_workspace=None):
         admin_workspace_ids = ProjectRole.objects.filter(
             user=user,
-            role='ADMIN'
+            role__in=['ADMIN', 'MANAGER']
         ).values_list('project__workspace_id', flat=True)
 
         workspaces = WorkSpace.objects.filter(
@@ -56,7 +56,7 @@ class DashboardSerializer(serializers.Serializer):
 
             admin_projects = ProjectRole.objects.filter(
                 user=user,
-                role='ADMIN'
+                role__in=['ADMIN', 'MANAGER']
             )
 
             if workspace is not None:
@@ -244,7 +244,7 @@ class DashboardSerializer(serializers.Serializer):
             for w in workspaces_queryset:
                 is_manager = ProjectRole.objects.filter(
                     user=user,
-                    role='ADMIN',
+                    role__in=['ADMIN', 'MANAGER'],
                     project__workspace=w
                 ).exists()
 

@@ -1,21 +1,26 @@
-from django.contrib.auth import get_user_model
-from users.models import Invitation
 from django.db.models import Count
 
-class InvitationService:
+from users.models import Invitation
+
+
+class InvitationMemberService:
+    """Utility service for listing invitation statistics by owner."""
+
     @staticmethod
-    def get_all_invitations(user,status=None,workspace_id=None, project_id=None):
-        stats = Invitation.objects.filter(sender=user).values('status').annotate(count=Count('status'))
-        querySet = Invitation.objects.filter(sender=user)
+    def get_all_invitations(user, status=None, workspace_id=None, project_id=None):
+        queryset = Invitation.objects.filter(sender=user)
 
         if workspace_id:
-            querySet = querySet.filter(invitation__sender=user,workspace_id=workspace_id)
+            queryset = queryset.filter(workspace_id=workspace_id)
 
         if project_id:
-            querySet = querySet.filter(invitation__sender=user,project_id=project_id)
+            queryset = queryset.filter(project_id=project_id)
 
         if status:
-                query = query.filter(status=status)
-        return{ querySet.order_by('-created_at'),
-            stats
+            queryset = queryset.filter(status=status)
+
+        stats = queryset.values('status').annotate(count=Count('status'))
+        return {
+            "queryset": queryset.order_by('-created_at'),
+            "stats": list(stats),
         }

@@ -1,67 +1,273 @@
 from django.contrib.auth import get_user_model
 from django.db import transaction
+
 from users.constants import create_activity_log, create_notification
-from users.errors.exceptions import (BaseAppException,ProjectInvitationError,WorkspaceNotFound,ProjectNotFound,EmailAndWorkspaceRequired,ProjectIdRequired,InvitationAlreadyAccepted,InvitationForbidden,InvitationRejectForbidden)
+from users.errors.exceptions import (
+    EmailAndWorkspaceRequired,
+    InvitationAlreadyAccepted,
+    InvitationForbidden,
+    InvitationRejectForbidden,
+    ProjectIdRequired,
+    ProjectNotFound,
+    WorkspaceNotFound,
+)
 from users.models import Invitation, WorkSpaceMember, WorkSpace, Project, ProjectRole
 from users.utils import notify_existing_user, notify_new_user
 
+
 class InvitationService:
+    PROJECT_ROLES = {"ADMIN", "MANAGER", "EMPLOYEE"}
+    WORKSPACE_ROLES = {"ADMIN", "MEMBER"}
+
     @staticmethod
     def get_user_invitations(user):
         return Invitation.objects.filter(receiver_email=user.email)
 
+    @staticmethod
+    def _normalize_list(value):
+        if not value:
+            return []
+        if isinstance(value, str):
+            return [value]
+        return list(value)
 
-class InvitationService:
+    @staticmethod
+    def _normalize_email_items(data):
+        email_items = (
+            data.get("receiver_emails")
+            or data.get("member_emails")
+            or data.get("emails")
+            or []
+        )
+        email_items = InvitationService._normalize_list(email_items)
+
+        single_email = data.get("receiver_email") or data.get("email")
+        if single_email:
+            email_items.append(single_email)
+
+        normalized = []
+        for item in email_items:
+            if isinstance(item, dict):
+                normalized.append({
+                    "email": item.get("email") or item.get("receiver_email"),
+                    "role": item.get("role"),
+                })
+            else:
+                normalized.append({"email": item, "role": None})
+        return normalized
+
+    @staticmethod
+    def _workspace_role(role):
+        return "ADMIN" if role == "ADMIN" else "MEMBER"
+
+    @staticmethod
+    def _project_role(role):
+        role = role or "EMPLOYEE"
+        return role if role in InvitationService.PROJECT_ROLES else "EMPLOYEE"
+
+    @staticmethod
+    def _get_workspace(workspace_value):
+        if isinstance(workspace_value, WorkSpace):
+            return workspace_value
+        if not workspace_value:
+            raise EmailAndWorkspaceRequired()
+        try:
+            return WorkSpace.objects.get(id=workspace_value)
+        except WorkSpace.DoesNotExist:
+            raise WorkspaceNotFound()
+
+    @staticmethod
+    def _get_project(project_id):
+        if not project_id:
+            raise ProjectIdRequired()
+        try:
+            return Project.objects.select_related("workspace").get(id=project_id)
+        except Project.DoesNotExist:
+            raise ProjectNotFound()
+
+    @staticmethod
+    def _send_email(email, receiver, sender_name, workspace_name):
+        if receiver:
+            notify_existing_user(email, sender_name, workspace_name)
+        else:
+            notify_new_user(email, sender_name, workspace_name)
+
     @staticmethod
     def send_workspace_invitation(sender, data):
         User = get_user_model()
+        workspace = InvitationService._get_workspace(data.get("workspace") or data.get("workspace_id"))
+        email_items = InvitationService._normalize_email_items(data)
 
-        receiver_email = data.get("receiver_email")
-        receiver_emails = data.get("receiver_emails")
-        workspace = data.get("workspace")
-        role = data.get("role", "EMPLOYEE")
-
-        success_list = []
-        error_list = []
-
-        if not workspace:
+        if not email_items:
             raise EmailAndWorkspaceRequired()
-
-        if not isinstance(workspace, WorkSpace):
-            try:
-                workspace = WorkSpace.objects.get(id=workspace)
-            except WorkSpace.DoesNotExist:
-                raise WorkspaceNotFound()
 
         sender_name = sender.get_full_name() or sender.username
         workspace_name = workspace.name
+        success_list = []
+        error_list = []
 
+        for item in email_items:
+            email = item.get("email")
+            role = InvitationService._workspace_role(item.get("role") or data.get("role") or "MEMBER")
 
-        if receiver_emails:
-            for item in receiver_emails:
+            if not email:
+                error_list.append({
+                    "type": "INVALID_EMAIL",
+                    "email": None,
+                    "message": "Email is required",
+                    "code": "INVALID_EMAIL",
+                })
+                continue
 
-                if isinstance(item, dict):
-                    email = item.get("email")
-                    item_role = item.get("role", "MEMBER")
+            receiver = User.objects.filter(email=email).first()
+            existing_invitation = Invitation.objects.filter(
+                receiver_email=email,
+                workspace=workspace,
+                project__isnull=True,
+            ).first()
+
+            if existing_invitation:
+                if existing_invitation.status == "ACCEPTED":
+                    error_list.append({
+                        "type": "ALREADY_ACCEPTED",
+                        "email": email,
+                        "message": "Invitation already accepted",
+                        "code": "INVITATION_ALREADY_ACCEPTED",
+                    })
+                    continue
+
+                existing_invitation.status = "PENDING"
+                existing_invitation.sender = sender
+                existing_invitation.receiver = receiver
+                existing_invitation.role = role
+                existing_invitation.save(update_fields=["status", "sender", "receiver", "role", "updated_at"])
+                invitation = existing_invitation
+                result_type = "INVITATION_RESENT"
+                result_code = "INVITATION_RESENT_SUCCESS"
+            else:
+                invitation = Invitation.objects.create(
+                    sender=sender,
+                    receiver=receiver,
+                    receiver_email=email,
+                    workspace=workspace,
+                    project=None,
+                    role=role,
+                    status="PENDING",
+                )
+                result_type = "INVITATION_CREATED"
+                result_code = "INVITATION_CREATED_SUCCESS"
+
+            InvitationService._send_email(email, receiver, sender_name, workspace_name)
+            create_activity_log(
+                user=sender,
+                action="INVITATION_SENT",
+                action_id=invitation.id,
+                subject_name=email,
+                target_title=workspace.name,
+                reason="Workspace invitation sent",
+                is_by_admin=True,
+            )
+            if receiver:
+                create_notification(
+                    recipient=receiver,
+                    notification_type="INVITATION_RECEIVED",
+                    title="New Workspace Invitation",
+                    message=f"{sender.username} invited you to join {workspace.name}.",
+                    navigation_target=f"/workspaces/{workspace.id}",
+                )
+
+            success_list.append({
+                "type": result_type,
+                "email": email,
+                "invitation_id": invitation.id,
+                "role": role,
+                "code": result_code,
+            })
+
+        return {"success": success_list, "errors": error_list}
+
+    @staticmethod
+    def send_project_invitation(sender, data):
+        User = get_user_model()
+        project = InvitationService._get_project(data.get("project_id") or data.get("project"))
+        role = InvitationService._project_role(data.get("role"))
+        email_items = InvitationService._normalize_email_items(data)
+        members_ids = InvitationService._normalize_list(data.get("members_ids"))
+
+        sender_name = sender.get_full_name() or sender.username
+        workspace_name = project.workspace.name
+        success_list = []
+        error_list = []
+
+        with transaction.atomic():
+            for member in members_ids:
+                if isinstance(member, dict):
+                    user_id = member.get("id") or member.get("user_id")
+                    user_role = InvitationService._project_role(member.get("role") or role)
                 else:
-                    email = item
-                    item_role = "MEMBER"
+                    user_id = member
+                    user_role = role
+
+                try:
+                    user_to_add = User.objects.get(id=user_id)
+                except User.DoesNotExist:
+                    error_list.append({
+                        "type": "USER_NOT_FOUND",
+                        "id": user_id,
+                        "message": "User not found",
+                        "code": "USER_NOT_FOUND",
+                        "status_code": 404,
+                    })
+                    continue
+
+                WorkSpaceMember.objects.get_or_create(
+                    workspace=project.workspace,
+                    user=user_to_add,
+                    defaults={"role": InvitationService._workspace_role(user_role)},
+                )
+                project_role, created = ProjectRole.objects.get_or_create(
+                    project=project,
+                    user=user_to_add,
+                    defaults={"role": user_role},
+                )
+                if not created and project_role.role != user_role:
+                    project_role.role = user_role
+                    project_role.save(update_fields=["role"])
+
+                create_notification(
+                    recipient=user_to_add,
+                    notification_type="SYSTEM_ALERT",
+                    title="Project Access Updated",
+                    message=f"You were added to project '{project.name}' as {user_role}.",
+                    navigation_target=f"/projects/{project.id}",
+                )
+
+                success_list.append({
+                    "type": "USER_ADDED",
+                    "id": user_id,
+                    "role": user_role,
+                    "message": "User added successfully",
+                    "code": "USER_ADDED_SUCCESS",
+                })
+
+            for item in email_items:
+                email = item.get("email")
+                item_role = InvitationService._project_role(item.get("role") or role)
 
                 if not email:
                     error_list.append({
                         "type": "INVALID_EMAIL",
                         "email": None,
                         "message": "Email is required",
-                        "code": "INVALID_EMAIL"
+                        "code": "INVALID_EMAIL",
                     })
                     continue
 
-                User = get_user_model()
                 receiver = User.objects.filter(email=email).first()
-
                 existing_invitation = Invitation.objects.filter(
                     receiver_email=email,
-                    workspace=workspace
+                    workspace=project.workspace,
+                    project=project,
                 ).first()
 
                 if existing_invitation:
@@ -69,310 +275,61 @@ class InvitationService:
                         error_list.append({
                             "type": "ALREADY_ACCEPTED",
                             "email": email,
-                            "code": "INVITATION_ALREADY_ACCEPTED"
+                            "message": "Invitation already accepted",
+                            "code": "INVITATION_ALREADY_ACCEPTED",
                         })
                         continue
 
                     existing_invitation.status = "PENDING"
                     existing_invitation.sender = sender
+                    existing_invitation.receiver = receiver
                     existing_invitation.role = item_role
-                    existing_invitation.save()
+                    existing_invitation.save(update_fields=["status", "sender", "receiver", "role", "updated_at"])
+                    invitation = existing_invitation
+                    result_type = "INVITATION_RESENT"
+                    result_code = "INVITATION_RESENT_SUCCESS"
+                else:
+                    invitation = Invitation.objects.create(
+                        sender=sender,
+                        receiver=receiver,
+                        receiver_email=email,
+                        workspace=project.workspace,
+                        project=project,
+                        role=item_role,
+                        status="PENDING",
+                    )
+                    result_type = "INVITATION_SENT"
+                    result_code = "INVITATION_SENT_SUCCESS"
 
-                    success_list.append({
-                        "type": "INVITATION_RESENT",
-                        "email": email,
-                        "invitation_id": existing_invitation.id,
-                        "role": item_role,
-                        "code": "INVITATION_RESENT_SUCCESS"
-                    })
-                    continue
-
-                invitation = Invitation.objects.create(
-                    sender=sender,
-                    receiver=receiver,
-                    receiver_email=email,
-                    workspace=workspace,
-                    role=item_role,
-                    status="PENDING",
+                InvitationService._send_email(email, receiver, sender_name, workspace_name)
+                create_activity_log(
+                    user=sender,
+                    action="INVITATION_SENT",
+                    action_id=invitation.id,
+                    subject_name=email,
+                    target_title=project.name,
+                    reason="Project invitation sent",
+                    is_by_admin=True,
                 )
+                if receiver:
+                    create_notification(
+                        recipient=receiver,
+                        notification_type="INVITATION_RECEIVED",
+                        title="New Project Invitation",
+                        message=f"{sender.username} invited you to project {project.name}.",
+                        navigation_target=f"/projects/{project.id}",
+                    )
 
                 success_list.append({
-                    "type": "INVITATION_CREATED",
+                    "type": result_type,
                     "email": email,
                     "invitation_id": invitation.id,
                     "role": item_role,
-                    "code": "INVITATION_CREATED_SUCCESS"
+                    "message": "Invitation processed successfully",
+                    "code": result_code,
                 })
 
-                if receiver:
-                    notify_existing_user(email, sender_name, workspace_name)
-                else:
-                    notify_new_user(email, sender_name, workspace_name)
-
-          
-        if not receiver_email:
-            raise EmailAndWorkspaceRequired()
-
-        receiver = User.objects.filter(email=receiver_email).first()
-
-        invitation = Invitation.objects.create(
-            sender=sender,
-            receiver=receiver,
-            receiver_email=receiver_email,
-            workspace=workspace,
-            role=role,
-            status="PENDING",
-        )
-
-        success_list.append({
-            "type": "INVITATION_CREATED",
-            "email": receiver_email,
-            "invitation_id": invitation.id,
-            "code": "INVITATION_CREATED_SUCCESS"
-        })
-
-        if receiver:
-            notify_existing_user(receiver_email, sender_name, workspace_name)
-        else:
-            notify_new_user(receiver_email, sender_name, workspace_name)
-
-        return {
-    "success": success_list,
-    "errors": error_list
-}
-###########################################
-    """
-    @staticmethod
-    def send_workspace_invitation(sender, data):
-        User = get_user_model()
-        receiver_email = data.get("receiver_email")
-        workspace = data.get("workspace")
-        role = data.get("role", "EMPLOYEE")
-        success_list = []
-        error_list = []
-
-
-        if not receiver_email or not workspace:
-            raise EmailAndWorkspaceRequired()
-
-        if not isinstance(workspace, WorkSpace):
-            try:
-                workspace = WorkSpace.objects.get(id=workspace)
-            except WorkSpace.DoesNotExist:
-                raise WorkspaceNotFound()
-        else:
-                try:
-                    workspace = WorkSpace.objects.get(id=workspace)
-                except WorkSpace.DoesNotExist:
-                    raise WorkspaceNotFound()
-        sender_name = sender.get_full_name() or sender.username
-        workspace_name = workspace.name
-
-        existing_invitation = Invitation.objects.filter(receiver_email=receiver_email, workspace_id=workspace).first()
-
-        if existing_invitation:
-            if existing_invitation.status == "ACCEPTED":
-                raise InvitationAlreadyAccepted()
-
-            existing_invitation.status = "PENDING"
-            existing_invitation.sender = sender
-            existing_invitation.role = role
-            existing_invitation.save()
-
-            notify_existing_user(receiver_email, sender_name, workspace_name)
-
-            return success_response(
-            message="Invitation resent and updated.",
-            code="INVITATION_RESENT_SUCCESS",
-            data={
-                "invitation_id": existing_invitation.id if existing_invitation else None
-            }
-)
-        receiver = User.objects.filter(email=receiver_email).first()
-
-        invitation = Invitation.objects.create(
-            sender=sender,
-            receiver=receiver,
-            receiver_email=receiver_email,
-            workspace=workspace,
-            role=role,
-            status="PENDING",
-        )
-
-        if receiver:
-            notify_existing_user(receiver_email, sender_name, workspace_name)
-            success_list.append({
-    "type": "INVITATION_RESENT",
-    "email": receiver_email,
-    "invitation_id": existing_invitation.id,
-    "message": "Invitation resent successfully",
-    "code": "INVITATION_RESENT_SUCCESS"
-})
-
-        else:
-            notify_new_user(receiver_email, sender_name, workspace_name)
-            success_list.append({
-    "type": "INVITATION_CREATED",
-    "email": receiver_email,
-    "invitation_id": invitation.id,
-    "message": "Invitation created successfully",
-    "code": "INVITATION_CREATED_SUCCESS"
-})
-
-        create_activity_log(
-            user=sender,
-            action="INVITATION_SENT",
-            action_id=invitation.id,
-            subject_name=receiver_email,
-            target_title=workspace.name,
-            reason="New invitation sent"
-        )
-
-
-        if receiver:
-            create_notification(
-                recipient=receiver,
-                notification_type="INVITATION_RECEIVED",
-                title="New Invitation",
-                message=f"{sender.username} invited you to {workspace.name}"
-            )
-    """
-##################################################################333
-    @staticmethod
-    def send_project_invitation(sender, data):
-        User = get_user_model()
-        project_id = data.get('project_id')
-        role = data.get('role', 'MEMBER')
-        receiver_emails = data.get('receiver_emails', [])
-        members_ids = data.get('members_ids', [])
-
-        projects = Project.objects.select_related('workspace').all()
-        if not project_id:
-            raise ProjectIdRequired()
-
-        try:
-            project = Project.objects.select_related('workspace').get(id=project_id)
-        except Project.DoesNotExist:
-            raise ProjectNotFound()
-
-        sender_name = sender.get_full_name() or sender.username
-        workspace_name = project.workspace.name
-        success_list = []
-        error_list = []
-
-        for member in members_ids:
-            if isinstance(member, dict):
-                user_id = member.get("id")
-                user_role = member.get("role", "EMPLOYEE")
-            else:
-                user_id = member
-                user_role = "EMPLOYEE"
-            try:
-                user_to_add = User.objects.get(id=user_id)
-
-                workspace_member, _ = WorkSpaceMember.objects.get_or_create(
-                    workspace=project.workspace, user=user_to_add,
-                    defaults={'role': user_role}
-                )
-                ProjectRole.objects.get_or_create(
-                    project=project, user=user_to_add, defaults={'role': user_role}
-                )
-
-                success_list.append({
-                "type": "USER_ADDED",
-                "id": user_id,
-                "message": "User added successfully",
-                "code": "USER_ADDED_SUCCESS"
-            })
-
-
-            except User.DoesNotExist:
-
-                error_list.append({
-    "type": "USER_NOT_FOUND",
-    "id": user_id,
-    "message": "User not found",
-    "code": "USER_NOT_FOUND",
-    "status_code": 404
-})
-                continue
-        for item in receiver_emails:
-
-            if isinstance(item, dict):
-                    email = item.get("email")
-                    item_role = item.get("role", "MEMBER")
-            else:
-                    email = item
-                    item_role = "MEMBER"
-
-            if not email:
-                    error_list.append({
-                        "type": "INVALID_EMAIL",
-                        "email": None,
-                        "message": "Email is required",
-                        "code": "INVALID_EMAIL"
-                    })
-                    continue
-
-
-            try:
-                existing_invitation = Invitation.objects.filter(
-                    receiver_email=email, workspace=project.workspace, project=project
-                ).first()
-
-                if existing_invitation and existing_invitation.status != 'ACCEPTED':
-                    existing_invitation.status = 'PENDING'
-                    existing_invitation.sender = sender
-                    existing_invitation.role = role
-                    existing_invitation.save()
-                    notify_existing_user(email, sender_name, workspace_name)
-                    success_list.append({
-    "type": "INVITATION_RESENT",
-    "email": email,
-    "invitation_id": existing_invitation.id,
-    "message": "Invitation resent successfully",
-    "code": "INVITATION_RESENT_SUCCESS"
-})
-                else:
-                    receiver = User.objects.filter(email=email).first()
-                    invitation =  Invitation.objects.create(
-                        sender=sender, receiver=receiver, receiver_email=email,
-                        workspace=project.workspace, project=project, role=role, status='PENDING'
-                    )
-
-                    if receiver:
-                        notify_existing_user(email, sender_name, workspace_name)
-                        success_list.append({
-    "type": "INVITATION_RESENT",
-    "email": email,
-    "invitation_id": invitation.id,
-    "message": "Invitation resent successfully",
-    "code": "INVITATION_RESENT_SUCCESS"
-})
-                    else:
-                        notify_new_user(email, sender_name, workspace_name)
-                        success_list.append({
-    "type": "INVITATION_SENT",
-    "email": email,
-    "message": "Invitation sent successfully",
-    "code": "INVITATION_SENT_SUCCESS"
-})
-            except Exception as e:
-                    error_list.append({
-    "type": "INVALID_EMAIL",
-    "email": email,
-    "message": "User not found for this email",
-    "code": "USER_NOT_FOUND",
-    "status_code": 404
-})
-        import inspect
-
-        return {
-    "success": success_list,
-    "errors": error_list
-}
-
-
+        return {"success": success_list, "errors": error_list}
 
     @staticmethod
     def accept_invitation(invitation, user):
@@ -383,19 +340,20 @@ class InvitationService:
             WorkSpaceMember.objects.get_or_create(
                 workspace=invitation.workspace,
                 user=user,
-                defaults={"role": invitation.role},
+                defaults={"role": InvitationService._workspace_role(invitation.role)},
             )
 
             if invitation.project:
                 ProjectRole.objects.get_or_create(
                     project=invitation.project,
                     user=user,
-                    defaults={"role": invitation.role},
+                    defaults={"role": InvitationService._project_role(invitation.role)},
                 )
 
             invitation.receiver = user
             invitation.status = "ACCEPTED"
-            invitation.save()
+            invitation.save(update_fields=["receiver", "status", "updated_at"])
+
             create_activity_log(
                 user=user,
                 action="INVITATION_ACCEPTED",
@@ -403,21 +361,17 @@ class InvitationService:
                 subject_name=user.username,
                 target_title=invitation.workspace.name,
                 reason="User accepted the invitation",
-                is_by_admin=False
+                is_by_admin=False,
             )
-
             create_notification(
                 recipient=invitation.sender,
                 notification_type="INVITATION_ACCEPTED",
                 title="Invitation Accepted",
-                message=f"{user.username} has accepted your invitation to join {invitation.workspace.name}.",
-                navigation_target=f"/workspaces/{invitation.workspace.id}"
+                message=f"{user.username} accepted your invitation to {invitation.workspace.name}.",
+                navigation_target=f"/workspaces/{invitation.workspace.id}",
             )
 
-        return {
-    "invitation_id": invitation.id,
-    "status": "ACCEPTED"
-}
+        return {"invitation_id": invitation.id, "status": "ACCEPTED"}
 
     @staticmethod
     def reject_invitation(invitation, user):
@@ -426,150 +380,23 @@ class InvitationService:
 
         invitation.status = "REJECTED"
         invitation.receiver = user
-        invitation.save()
+        invitation.save(update_fields=["status", "receiver", "updated_at"])
+
         create_activity_log(
             user=user,
             action="INVITATION_REJECTED",
             action_id=invitation.id,
             subject_name=user.username,
             target_title=invitation.workspace.name,
-            reason="User rejected the invitation"
+            reason="User rejected the invitation",
+            is_by_admin=False,
         )
-
         create_notification(
             recipient=invitation.sender,
             notification_type="INVITATION_REJECTED",
             title="Invitation Rejected",
-            message=f"{user.username} rejected your invitation to {invitation.workspace.name}."
+            message=f"{user.username} rejected your invitation to {invitation.workspace.name}.",
+            navigation_target=f"/workspaces/{invitation.workspace.id}",
         )
 
-        return {
-        "invitation_id": invitation.id,
-        "status": "REJECTED"
-    }
-
-
-
-
-
-    @staticmethod
-    def _send_project_email_invitations(user_model, sender, project, member_emails, role):
-        sender_name = sender.get_full_name() or sender.username
-        workspace_name = project.workspace.name
-        workspace = project.workspace
-        invitations_count = 0
-        existing_invitation = Invitation.objects.filter(
-    receiver_email=email,
-    workspace=workspace,
-    project=project
-).first()
-
-        for email in member_emails:
-            existing_invitation = Invitation.objects.filter(receiver_email=email,workspace=workspace,project=project,).first()
-
-            if existing_invitation:
-                if existing_invitation.status == "ACCEPTED":
-                    continue
-
-                existing_invitation.status = "PENDING"
-                existing_invitation.sender = sender
-                existing_invitation.role = role
-                existing_invitation.save()
-
-                notify_existing_user(email, sender_name, workspace_name)
-                invitations_count += 1
-                continue
-
-            receiver = user_model.objects.filter(email=email).first()
-
-            create_activity_log(
-                user=sender,
-                action="INVITATION_SENT",
-                action_id=existing_invitation.id,
-                subject_name=email,
-                target_title=project.name,
-                reason="Project invitation sent")
-
-            if receiver:
-                Invitation.objects.create(
-                sender=sender,
-                receiver=receiver,
-                receiver_email=email,
-                workspace=workspace,
-                project=project,
-                role=role,
-                status="PENDING",
-            )
-
-                create_notification(
-                    recipient=receiver,
-                    notification_type="INVITATION_RECEIVED",
-                    title="New Project Invitation",
-                    message=f"{sender.username} invited you to {project.name}"
-                )
-                notify_existing_user(email, sender_name, workspace_name)
-            else:
-                Invitation.objects.create(
-                sender=sender,
-                receiver_email=email,
-                project=project,
-                workspace=project.workspace,
-                role=role,
-                status='PENDING')
-
-
-                notify_new_user(email, sender_name, workspace_name)
-
-            invitations_count += 1
-
-        return invitations_count
-
-
-
-
-
-
-    @staticmethod
-    def _add_existing_members_to_project(user_model, project, members_ids, role):
-        added_count = 0
-
-        for user_id in members_ids:
-            try:
-                user_to_add = user_model.objects.get(id=user_id)
-            except user_model.DoesNotExist:
-                continue
-
-            is_workspace_member = WorkSpaceMember.objects.filter(
-                workspace=project.workspace,
-                user=user_to_add,
-            ).exists()
-
-            if not is_workspace_member:
-                continue
-
-            WorkSpaceMember.objects.get_or_create(
-                workspace=project.workspace,
-                user=user_to_add,
-                defaults={"role": "EMPLOYEE"},
-            )
-
-            _, created = ProjectRole.objects.get_or_create(
-                project=project,
-                user=user_to_add,
-                defaults={"role": role},
-            )
-
-            if created:
-                added_count += 1
-
-        return added_count
-
-    @staticmethod
-    def _normalize_list(value):
-        if not value:
-            return []
-
-        if isinstance(value, str):
-            return [value]
-
-        return value
+        return {"invitation_id": invitation.id, "status": "REJECTED"}

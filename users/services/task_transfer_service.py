@@ -1,4 +1,4 @@
-from jsonschema import ValidationError
+from rest_framework.exceptions import ValidationError
 
 from users.constants import create_activity_log
 from users.models import Notification, Project, ProjectRole, Task, User
@@ -8,14 +8,7 @@ class TaskTransferService:
 
     @staticmethod
     def get_orphaned_tasks(project):
-        try:
-            system_bot = User.objects.get(username='system_bot')
-        except User.DoesNotExist:
-            return []
-
-        return Task.objects.filter(
-            project=project,
-            assigned_to__isnull=True)
+        return Task.objects.filter(project=project, assigned_to__isnull=True)
 
 
     @staticmethod
@@ -30,7 +23,7 @@ class TaskTransferService:
         if count == 0:
             return 0
 
-        tasks.update(assigned_to=new_assignee)
+        tasks.update(assigned_to=new_assignee, status="TODO")
 
         return count
 
@@ -38,11 +31,11 @@ class TaskTransferService:
     def assign_task_to_user(task, new_assignee, performed_by,project):
         task.assigned_to = new_assignee
         task.status = "TODO"
-        task.save()
+        task.save(update_fields=["assigned_to", "status", "updated_at"])
 
         create_activity_log(
             user=performed_by,
-            action="TASK_ASSIGNED",
+            action="GENERAL_UPDATE",
             action_id=task.id,
             changes={"new_assignee": new_assignee.username}
         )
@@ -85,7 +78,7 @@ class ProjectService:
 
         create_activity_log(
             user=performed_by,
-            action="PROJECT_MANAGER_ASSIGNED",
+            action="ROLE_UPDATED",
             action_id=project.id,
             changes={
                 "subject_name": new_manager.username,
@@ -158,42 +151,36 @@ class RoleService:
 
 
     @staticmethod
-    def transfer_tasks(project, new_supervisor, performed_by):
-        try:
-            system_bot = User.objects.get(username='system_bot')
-        except User.DoesNotExist:
-            return 0
-
-        tasks = Task.objects.filter(
-            project=project,
-            supervisor=system_bot
-        )
-
+    def transfer_tasks(project, new_assignee, performed_by):
+        tasks = Task.objects.filter(project=project, assigned_to__isnull=True)
         count = tasks.count()
 
         if count == 0:
             return 0
 
-        tasks.update(supervisor=new_supervisor)
+        task_ids = list(tasks.values_list('id', flat=True))
+        tasks.update(assigned_to=new_assignee, status="TODO")
+
         create_activity_log(
             user=performed_by,
-            action="TASKS_TRANSFERRED",
+            action="GENERAL_UPDATE",
             action_id=project.id,
             changes={
-                "subject_name": new_supervisor.username,
+                "subject_name": new_assignee.username,
                 "target_title": f"Project {project.name}",
-                "reason": f"{count} tasks transferred to {new_supervisor.username}",
-                "is_by_admin": True
+                "reason": f"{count} unassigned tasks transferred to {new_assignee.username}",
+                "is_by_admin": True,
+                "task_ids": task_ids,
             }
         )
 
-        for task in tasks:
+        for task_id in task_ids:
             Notification.objects.create(
-                recipient=new_supervisor,
+                recipient=new_assignee,
                 notification_type="SYSTEM_ALERT",
-                title="Assigned Orphaned Task",
-                message=f"You have been assigned task '{task.title}' in project '{project.name}'.",
-                navigation_target=f"/task_details/{task.id}"
+                title="Assigned Task",
+                message=f"You have been assigned a task in project '{project.name}'.",
+                navigation_target=f"/task_details/{task_id}"
             )
 
         return count

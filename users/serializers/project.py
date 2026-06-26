@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from users.errors.exceptions import ProjectNotMember, WorkspaceAccessDenied
-from ..models import Project, ProjectRole, Task
+from ..models import Project, ProjectRole, Task, WorkSpaceMember
 from drf_spectacular.utils import extend_schema_field
 from users.models import User
 
@@ -100,7 +100,7 @@ class ProjectSerializer(serializers.ModelSerializer):
     def validate_workspace(self, value):
         user = self.context['request'].user
         if not value.members.filter(id=user.id).exists():
-            raise WorkspaceAccessDenied
+            raise WorkspaceAccessDenied()
         return value
 
 
@@ -132,18 +132,9 @@ class ProjectSerializer(serializers.ModelSerializer):
         return members_list
 
 
-class ProjectMemberRoleSerializer(serializers.ModelSerializer):
-
-    is_owner = serializers.SerializerMethodField()
-    user_id = serializers.IntegerField(source='user.id')
-
-    class Meta:
-        model = ProjectRole
-        fields = ['user_id', 'is_owner']
-    def get_is_owner(self, obj):
-            return obj.role == 'OWNER'
-
-
+class ProjectMemberRoleSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+    role = serializers.ChoiceField(choices=['ADMIN', 'MANAGER', 'EMPLOYEE'], default='EMPLOYEE')
 class ProjectCreateSerializer(serializers.ModelSerializer):
     members_with_roles = ProjectMemberRoleSerializer(many=True, write_only=True, required=False)
 
@@ -154,7 +145,7 @@ class ProjectCreateSerializer(serializers.ModelSerializer):
     def validate_workspace(self, value):
         user = self.context['request'].user
         if not value.members.filter(id=user.id).exists():
-            raise ProjectNotMember
+            raise ProjectNotMember()
         return value
 
 
@@ -166,12 +157,17 @@ class ProjectCreateSerializer(serializers.ModelSerializer):
 
         for member_item in members_data:
             user_id = member_item['user_id']
-            role = member_item['role']
+            role = member_item.get('role', 'EMPLOYEE')
 
-            ProjectRole.objects.create(
+            WorkSpaceMember.objects.get_or_create(
+                workspace=project.workspace,
+                user_id=user_id,
+                defaults={'role': 'MEMBER'}
+            )
+            ProjectRole.objects.get_or_create(
                 project=project,
                 user_id=user_id,
-                role=role
+                defaults={'role': role}
             )
 
         return project
