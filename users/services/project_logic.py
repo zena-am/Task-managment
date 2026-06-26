@@ -4,7 +4,7 @@ from users.models import  ProjectRole
 from users.services.invitationsService import InvitationService
 
 
-class ProjectService:
+class ProjectServiceLogic:
     @staticmethod
     def create(serializer, request):
             workspace = serializer.validated_data["workspace"]

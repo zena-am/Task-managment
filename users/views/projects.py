@@ -4,7 +4,7 @@ from users.models import Project
 from rest_framework.response import Response
 from rest_framework import status, viewsets
 from django.db import transaction
-from users.services.projectservice import ProjectService
+from users.services.project_logic import ProjectServiceLogic as ProjectService
 from rest_framework.decorators import action
 from rest_framework import status
 from rest_framework.response import Response
