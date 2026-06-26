@@ -3,6 +3,8 @@ from django.shortcuts import get_object_or_404
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
 
+from users.errors.exceptions import BaseAppException, OnlyOneWorkspaceAdminError, PermissionDeniedError
+from users.errors.messages.success import success_response
 from users.services.WorkspaceService import WorkspaceServices
 from ..models import User, WorkSpace, WorkSpaceMember, Invitation
 from ..serializers import WorkSpaceSerializer,WorkSpaceCreateSerializer
@@ -11,6 +13,9 @@ from users.views.invitations import InvitationViewSet
 from django.db.models import Case, When, Value, BooleanField
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework.decorators import APIView, action
+from django.db import transaction
+from django.shortcuts import get_object_or_404
+
 
 @extend_schema_view(
         tags=['الفضاءات'],
@@ -46,6 +51,59 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         user=self.request.user,
         data=self.request.data)
 
+        @extend_schema(tags=['الفضاءات'], summary="نقل ملكية")
+        @action(detail=True, methods=['post'], url_path='transfer')
+        def transfer_owner(self, request, pk=None):
+                new_owner_id = request.data.get("new_owner_id")
+
+                if not new_owner_id:
+                        raise BaseAppException(
+                        detail="new_owner_id is required",
+                        code="NEW_OWNER_REQUIRED",
+                        status_code=400
+                        )
+
+                try:
+                        new_owner_id = int(new_owner_id)
+                except ValueError:
+                        raise BaseAppException(
+                        detail="new_owner_id must be a valid integer",
+                        code="INVALID_NEW_OWNER_ID",
+                        status_code=400
+                        )
+
+                workspace = get_object_or_404(WorkSpace, id=pk)
+                new_owner = get_object_or_404(User, id=new_owner_id)
+
+                if workspace.creator_id == new_owner_id:
+                        raise BaseAppException(
+                        detail="You are already the owner",
+                        code="ALREADY_OWNER",
+                        status_code=400
+                        )
+
+                if workspace.creator != request.user:
+                        raise PermissionDeniedError()
+
+                is_member = WorkSpaceMember.objects.filter(
+                        workspace=workspace,
+                        user=new_owner
+                ).exists()
+
+                if not is_member:
+                        raise BaseAppException(
+                        detail="User is not a member of this workspace",
+                        code="USER_NOT_IN_WORKSPACE",
+                        status_code=400
+                        )
+
+                WorkspaceServices.transfer_ownership(workspace, new_owner)
+
+                return Response(success_response(
+        message="Ownership transferred successfully",
+        code="WORKSPACE_OWNERSHIP_TRANSFERRED",
+        data=None
+        ))
 
 
 
@@ -67,7 +125,11 @@ class TogglePinWorkspaceAPIView(APIView):
                 workspace=workspace
                 )
 
-                return Response(result, status=status.HTTP_200_OK)
+                return Response(success_response(
+                        message="Workspace pin updated successfully",
+                        code="WORKSPACE_PIN_UPDATED",
+                        data=result))
+
 
 class LeaveWorkspaceAPIView(APIView):
         permission_classes = [permissions.IsAuthenticated]
@@ -88,24 +150,12 @@ class LeaveWorkspaceAPIView(APIView):
                 workspace=workspace
                 )
 
-                return Response(result, status=status.HTTP_200_OK)
+                return Response(success_response(
+                message="Left workspace successfully",
+                code="WORKSPACE_LEFT",
+                data=result
+                ))
 
-
-
-        @extend_schema(summary="نقل ملكية الفضاء")
-        @action(detail=True, methods=['post'], url_path='transfer-ownership')
-        def transfer_ownership(self, request, pk=None):
-                workspace = self.get_object()
-                new_owner_id = request.data.get('new_owner_id')
-
-                try:
-                        new_owner = User.objects.get(id=new_owner_id)
-                        WorkspaceServices.transfer_ownership(workspace, new_owner, request.user)
-                        return Response({"message": "تم نقل الملكية بنجاح"})
-                except User.DoesNotExist:
-                        return Response({"error": "المستخدم غير موجود"}, status=404)
-                except Exception as e:
-                        return Response({"error": str(e)}, status=400)
 
 
 

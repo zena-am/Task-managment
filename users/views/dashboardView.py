@@ -16,26 +16,34 @@ class DashboardView(APIView):
         description="يعيد هذا الرابط دفعة واحدة كل ما تحتاجه واجهة التطبيق الرئيسية (الهيدر، بطاقة التركيز، شريط الفضاءات، التنبيهات المخصصة حسب الرتبة، والنشاطات الأخيرة)",
         responses={200: DashboardSerializer}
     )
+
     def get(self, request):
         user = request.user
         workspace_id = request.query_params.get('workspace_id')
-
         workspace = None
         if workspace_id:
-            workspace = get_object_or_404(
-            WorkSpace,
-            Q(id=workspace_id) & (
+            workspace_qs = WorkSpace.objects.filter(
                 Q(members=user) |
                 Q(projects__projectrole__user=user, projects__projectrole__role='ADMIN')
+            ).distinct()
+
+            workspace = get_object_or_404(
+                workspace_qs,
+                id=workspace_id
             )
-        )
 
         dashboard_data = {
             "user_name": f"{user.first_name} {user.last_name}".strip() or user.username,
-            "user_avatar": user.profile.avatar.url if hasattr(user, 'profile') and user.profile.avatar else None,
+            "user_avatar": user.profile.avatar.url
+            if hasattr(user, 'profile') and user.profile.avatar
+            else None,
             "user": user,
-            "workspace":workspace
+            "workspace": workspace,
         }
-        serializer = DashboardSerializer(dashboard_data, context={'request': request})
+
+        serializer = DashboardSerializer(
+            dashboard_data,
+            context={'request': request}
+        )
 
         return Response(serializer.data, status=status.HTTP_200_OK)

@@ -10,7 +10,20 @@ class IsWorkspaceOwnerOrReadOnly(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return is_member
         return obj.creator == request.user
+class IsWorkspaceOwner(permissions.BasePermission):
+    message = "you aren't the creator of this workspace"
 
+    def has_object_permission(self, request, view, obj):
+
+        is_member = WorkSpaceMember.objects.filter(
+            workspace=obj.workspace,
+            user=request.user
+        ).exists()
+
+        if request.method in permissions.SAFE_METHODS:
+            return is_member
+
+        return obj.workspace.creator == request.user
 
 
 class IsProjectManagerOrReadOnly(permissions.BasePermission):
@@ -60,7 +73,12 @@ class IsTeamManagerForProject(permissions.BasePermission):
     message = "You are not a manager."
 
     def has_permission(self, request, view):
-        project_id = view.kwargs.get('project_id') or view.kwargs.get('pk')
+
+        project_id = (
+            view.kwargs.get('project_pk')
+            or view.kwargs.get('project_id')
+            or view.kwargs.get('pk')
+        )
 
         if not project_id:
             return False

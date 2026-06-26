@@ -1,6 +1,7 @@
 from rest_framework import viewsets, permissions
 from django.contrib.auth import get_user_model
 from users.errors.exceptions import TaskAlreadyAssigned
+from users.errors.messages.success import success_response
 from users.serializers import TaskCreateUpdateSerializer,TaskSerializer,ManagerReportReviewSerializer
 from users.serializers.task import ProjectWithoutManagerSerializer, TechnicalReportDetailSerializer
 from users.services.task_query_service import ProjectTaskCart, TaskCart, TaskQueryService
@@ -303,13 +304,11 @@ class ClaimTaskAPIView(APIView):
             request.user
         )
 
-        return Response(
-            {
-                "message":
-                f"You have successfully claimed the task: '{task.title}'."
-            },
-            status=status.HTTP_200_OK
-        )
+        return Response(success_response(
+    message="Task claimed successfully",
+    code="TASK_CLAIMED",
+    data={"task_id": task.id}
+), status=status.HTTP_200_OK)
 #######################################################################################################
 @extend_schema(
         tags=['المهام'],
@@ -333,10 +332,11 @@ class TaskStatusUpdateAPIView(APIView):
 
         TaskService.update_status(task, request.user, status_value)
 
-        return Response(
-            {"message": f"Task status updated successfully to {status_value}."},
-            status=status.HTTP_200_OK
-        )
+        return Response(success_response(
+    message="Task status updated successfully",
+    code="TASK_STATUS_UPDATED",
+    data={"status": status_value}
+), status=status.HTTP_200_OK)
 #######################################################################################################
 @extend_schema(
     tags=['التقارير الخاصة بالموظف']
@@ -412,10 +412,11 @@ class TransferSystemBot(APIView):
             new_role="MANAGER",
         )
 
-        return Response(
-            {"message": "Manager assigned successfully."}
-        )
-
+        return Response(success_response(
+    message="Manager assigned successfully",
+    code="MANAGER_ASSIGNED",
+    data=None
+), status=status.HTTP_200_OK)
 
 
 
@@ -464,8 +465,11 @@ class TransferTaskToUser(APIView):
                 project=project
             )
 
-            return Response({"message": "تم إسناد المهمة للمستخدم بنجاح"})
-
+            return Response(success_response(
+    message="Task assigned successfully",
+    code="TASK_ASSIGNED",
+    data=None
+), status=status.HTTP_200_OK)
     @extend_schema(
         summary="استعراض المهام المعلقة بدون موظف",
         description="تعيد قائمة المهام غير المسندة في المشروع",

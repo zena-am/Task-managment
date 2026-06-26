@@ -4,8 +4,10 @@ from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from drf_spectacular.utils import extend_schema
-from users.errors.exceptions  import (WorkspaceNotFound,  ProjectNotFound,  EmailAndWorkspaceRequired, ProjectIdRequired, InvitationAlreadyAccepted,InvitationForbidden,InvitationRejectForbidden,)
+from users.errors.exceptions  import (BaseAppException, WorkspaceNotFound,  ProjectNotFound,  EmailAndWorkspaceRequired, ProjectIdRequired, InvitationAlreadyAccepted,InvitationForbidden,InvitationRejectForbidden,)
 from users.errors.exceptions import ProjectNotFound
+from users.errors.messages.ErrorCode import ErrorMessages
+from users.errors.messages.success import success_response
 from users.permissions import IsTeamManager, IsWorkspaceOwnerOrReadOnly
 from rest_framework.permissions import IsAuthenticated
 from users.serializers import task, user
@@ -23,7 +25,33 @@ class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixin
     queryset = Invitation.objects.all()
     serializer_class = InvitationSerializer
     permission_classes = [IsAuthenticated]
+    @action(detail=True, methods=['delete'])
+    def revoke(self, request, pk=None):
+        invitation = self.get_object()
 
+        if invitation.sender != request.user:
+            raise ("You can only revoke your own invitations")
+
+        if invitation.status == "ACCEPTED":
+            raise BaseAppException(
+                detail="Cannot revoke accepted invitation",
+                code="INVITATION_ALREADY_ACCEPTED",
+                status_code=400
+            )
+
+        invitation.delete()
+
+        return Response(success_response(
+            message="Invitation revoked successfully",
+            code="INVITATION_REVOKED",
+            data={"invitation_id": pk}
+        ), status=status.HTTP_200_OK)
+    def get_object(self):
+        return get_object_or_404(
+            Invitation,
+            pk=self.kwargs["pk"],
+            receiver_email=self.request.user.email
+        )
     def get_queryset(self):
         return Invitation.objects.filter(receiver_email=self.request.user.email)
 
@@ -56,7 +84,11 @@ class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixin
                 request.user,
                 serializer.validated_data
             )
-            return Response({"detail": result['detail']}, status=status.HTTP_201_CREATED)
+            return Response(success_response(
+                message="Invitation sent successfully",
+                code="WORKSPACE_INVITATION_SENT",
+                data=result
+                ), status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 ########################################################################دعوات للمشروع
     @extend_schema(
@@ -66,6 +98,17 @@ class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixin
     )
     @action(detail=False, methods=['post'])
     def send_project_invitation(self, request):
+        result = InvitationService.send_project_invitation(
+            sender=request.user,
+            data=request.data
+        )
+
+        return Response(success_response(
+            message="Project invitation processed successfully",
+            code="PROJECT_INVITATION_PROCESSED",
+            data=result
+        ), status=status.HTTP_200_OK)
+
         User = get_user_model()
         member_emails = self.request.data.get('member_emails', [])
         if isinstance(member_emails, str):
@@ -73,7 +116,6 @@ class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixin
 
         project_id = request.data.get('project_id')
         role = request.data.get('role', 'MEMBER')
-        workspace_id = request.data.get('workspace_id')
 
         try:
             project = Project.objects.get(id=project_id)
@@ -93,17 +135,27 @@ class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixin
                             WorkSpaceMember.objects.get_or_create(
                                 workspace=project.workspace,
                                 user=user_to_add,
-                                defaults={'role': 'EMPLOYEE'}
+                                defaults={'role':role}
                             )
 
                             ProjectRole.objects.get_or_create(
                                 project=project,
                                 user=user_to_add,
-                                defaults={'role': 'DEV'}
+                                defaults={'role': role}
                             )
                     else:
 
-                        continue
+                        WorkSpaceMember.objects.create(
+                            workspace=project.workspace,
+                            user=user_to_add,
+                            role='EMPLOYEE'
+                        )
+
+                        ProjectRole.objects.get_or_create(
+                            project=project,
+                            user=user_to_add,
+                            defaults={'role': role}
+                        )
                 except User.DoesNotExist:
                     continue
         User = get_user_model()
@@ -197,10 +249,14 @@ class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixin
             invitation.status = 'ACCEPTED'
             invitation.save()
 
-        return Response(
-            {"detail": "You have successfully joined the workspace/project."},
-            status=status.HTTP_200_OK
-        )
+        return Response(success_response(
+        message="Invitation accepted successfully",
+        code="INVITATION_ACCEPTED",
+        data={
+            "workspace_id": invitation.workspace_id,
+            "project_id": invitation.project_id
+        }
+), status=status.HTTP_200_OK)
 
 ###################################################reject
     @extend_schema(
@@ -217,7 +273,11 @@ class InvitationViewSet( mixins.RetrieveModelMixin, mixins.ListModelMixin, mixin
         invitation.receiver = request.user
         invitation.save()
 
-        return Response({"detail": "Invitation rejected successfully."})
+        return Response(success_response(
+    message="Invitation rejected successfully",
+    code="INVITATION_REJECTED",
+    data={"invitation_id": invitation.id}
+), status=status.HTTP_200_OK)
 ###############################################################################################
 @extend_schema(tags=['Invitation Management'])
 
@@ -232,10 +292,15 @@ class invitationsMembers(viewsets.ViewSet):
         status = request.query_params.get('status')
         valid_statuses = ['PENDING', 'ACCEPTED', 'REJECTED']
         if status and status not in valid_statuses:
-            return Response({"error": "Invalid status"}, status=400)
+            raise BaseAppException(
+                detail="Invalid status",
+                code="INVALID_STATUS",
+                status_code=400
+)
         invitations = InvitationService.get_all_invitations(user=request.user,project_id=project_id,status=status)
         serializer = InvitationSerializer(invitations, many=True)
         return Response(serializer.data)
+
 
 
     @extend_schema(summary="دعوات أعضاء الفضاء")
@@ -244,7 +309,11 @@ class invitationsMembers(viewsets.ViewSet):
         status = request.query_params.get('status')
         valid_statuses = ['PENDING', 'ACCEPTED', 'REJECTED']
         if status and status not in valid_statuses:
-            return Response({"error": "Invalid status"}, status=400)
+            raise BaseAppException(
+            detail="Invalid status",
+            code="INVALID_STATUS",
+            status_code=400
+)
         invitations = InvitationService.get_all_invitations(workspace_id=workspace_id,user=request.user,status=status)
 
         serializer = InvitationSerializer(invitations, many=True)

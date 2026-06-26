@@ -11,7 +11,7 @@ SECRET_KEY = 'django-insecure-75950%b6k&a&0ma508=@1z=jz2a9x#@z)r7&&0akt(%(w_2)lb
 DEBUG = True
 AUTH_USER_MODEL = 'users.User'
 
-ALLOWED_HOSTS = ["127.0.0.1", "localhost",  "192.168.116.146","0.0.0.0"]
+ALLOWED_HOSTS = ["127.0.0.1", "localhost",  "192.168.116.146","192.168.116.139","0.0.0.0"]
 
 CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:8000",
@@ -19,7 +19,8 @@ CSRF_TRUSTED_ORIGINS = [
 
     "http://127.0.0.1:8080",
     "http://localhost:8080",
-    "http://192.168.116.146",
+    "http://192.168.116.146"
+    "http://192.168.116.139",
 ]
 
 
@@ -256,3 +257,4 @@ EMAIL_HOST_PASSWORD = 'gszpmsngdpqzakjd'
 
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 SERVER_EMAIL = EMAIL_HOST_USER
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

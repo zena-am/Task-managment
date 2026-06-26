@@ -188,9 +188,14 @@ class TechnicalReportViewSet(BaseSubmissionViewSet):
         serializer = self.get_serializer(report)
 
         return Response(
-            serializer.data,
-            status=status.HTTP_200_OK
-        )
+    success_response(
+        message="تم إرسال التقرير التقني بنجاح",
+        code="TECHNICAL_REPORT_SUBMITTED_SUCCESS",
+        data=serializer.data
+    ),
+    status=status.HTTP_200_OK
+)
+
 
 
 
@@ -368,10 +373,13 @@ class RequestFormViewSet(BaseSubmissionViewSet):
             response_serializer = self.get_serializer(request_form)
 
             return Response(
-                response_serializer.data,
-                status=status.HTTP_200_OK
-            )
-
+    success_response(
+        message=" REQUEST_REVIEWED_SUCCESS ",
+        code="REQUEST_REVIEWED_SUCCESS",
+        data=response_serializer.data
+    ),
+    status=status.HTTP_200_OK
+)
 
 
 ######################################################################################################

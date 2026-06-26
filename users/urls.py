@@ -9,25 +9,42 @@ from users.views import TransferSystemBot,DashboardView
 from users.views.members_views import ProjectMemberViewSet, WorkSpaceMemberViewSet
 from users.views.report import RequestFormViewSet, TechnicalReportViewSet
 from users.views.tasks import  ClaimTaskAPIView, ReviewTechnicalReportAPIView, TaskStatusUpdateAPIView, TransferTaskToUser
-from users.views.workspaces import LeaveWorkspaceAPIView, TogglePinWorkspaceAPIView
+from users.views.workspaces import LeaveWorkspaceAPIView, TogglePinWorkspaceAPIView, WorkspaceViewSet
 
 ##فقط اكتب الرابط في المتصفح لرؤوية جميع الروابط##
 # http://127.0.0.1:8000/user/api/docs/
 
+from rest_framework_nested.routers import NestedDefaultRouter
+
 router = DefaultRouter()
+from users.views.projects import ProjectViewSet
+
+router = DefaultRouter()
+router.register(r'projects', ProjectViewSet, basename='projects')
+router.register('workspace',WorkSpaceMemberViewSet,basename='workspace-members')
+
+project_router = NestedDefaultRouter(router,r'projects',lookup='project')
+workspace_router = NestedDefaultRouter(router,r'workspace',lookup='workspace')
+
+project_router.register(r'members',ProjectMemberViewSet,basename='project-members')
+workspace_router.register(r'members',WorkSpaceMemberViewSet,basename='workspace-members')
+
+
 router.register(r'notifications', views.NotificationViewSet, basename='notification')
 router.register(r'workspaces', views.WorkspaceViewSet, basename='workspace')
 router.register(r'projects', views.ProjectViewSet, basename='project')
 router.register(r'invitations', views.InvitationViewSet, basename='invitation')
 router.register(r'searchUser', views.searchUserViewSet, basename='search-user')
 router.register(r'TaskView', views.TaskView, basename='TaskView')
-router.register('workspace-members',WorkSpaceMemberViewSet,basename='workspace-members')
-router.register('project-members',ProjectMemberViewSet,basename='project-members')
+#router.register('workspace-members',WorkSpaceMemberViewSet,basename='workspace-members')
 router.register(r'technical-reports', TechnicalReportViewSet)
 router.register(r'requests', RequestFormViewSet)
 #router.register(r'requests', ReviewRequestFormAPIView)
 
 urlpatterns = [
+    path('', include(router.urls)),
+    path('', include(project_router.urls)),
+    path('', include(workspace_router.urls)),
 
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),

@@ -1,13 +1,16 @@
 from rest_framework import viewsets, permissions
-from django.contrib.auth import get_user_model
 from drf_spectacular.utils import extend_schema
-from users.views.invitations import InvitationViewSet
-from ..models import Project, ProjectRole, User, WorkSpaceMember, Invitation
+from users.models import Project
+from rest_framework.response import Response
+from rest_framework import status, viewsets
+from users.services import ProjectService
+from django.db import transaction
+from rest_framework.decorators import action
+from rest_framework import status
+from rest_framework.response import Response
 from ..serializers import ProjectSerializer,ProjectCreateSerializer
 from ..permissions import IsProjectManagerOrReadOnly
-from ..utils import notify_existing_user, notify_new_user
 from drf_spectacular.utils import extend_schema, extend_schema_view
-
 @extend_schema_view(
     list=extend_schema(
         tags=['المشاريع'],
@@ -24,11 +27,7 @@ from drf_spectacular.utils import extend_schema, extend_schema_view
         summary="إنشاء مشروع جديد",
         description="يقوم بإنشاء مشروع جديد داخل فضاء العمل المحدد"
     ),
-    update=extend_schema(
-        tags=['المشاريع'],
-        summary="تعديل مشروع",
-        description="تعديل بيانات مشروع موجود"
-    ),
+
     partial_update=extend_schema(
         tags=['المشاريع'],
         summary="تعديل جزئي لمشروع",
@@ -40,22 +39,114 @@ from drf_spectacular.utils import extend_schema, extend_schema_view
         description="حذف مشروع من النظام"
     ),
 )
-class ProjectViewSet(viewsets.ModelViewSet):
-    User = get_user_model()
-    permission_classes = [permissions.IsAuthenticated, IsProjectManagerOrReadOnly,IsProjectManagerOrReadOnly]
 
+class ProjectViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated, IsProjectManagerOrReadOnly]
+    serializer_class = ProjectSerializer
 
     def get_serializer_class(self):
-
         if self.action in ['create', 'update', 'partial_update']:
             return ProjectCreateSerializer
-
         return ProjectSerializer
 
-    def get_queryset(self):
-        return Project.objects.filter(workspace__members=self.request.user).distinct()
-#######################################################################
 
+
+    def get_queryset(self):
+        queryset = Project.objects.filter(
+            workspace__members=self.request.user
+        ).select_related(
+            'workspace'
+        ).distinct()
+
+        workspace_id = self.request.query_params.get('workspace')
+
+        if workspace_id:
+            queryset = queryset.filter(workspace_id=workspace_id)
+
+        return queryset
+
+    @extend_schema(
+    tags=['المشاريع'],
+    summary="مغادرة المشروع",
+    description="يسمح للمستخدم الحالي بمغادرة المشروع فقط دون مغادرة مساحة العمل")
+    @action(detail=True, methods=['delete'], url_path='leave')
+    def leave_project(self, request, pk=None):
+        project = self.get_object()
+        user = request.user
+
+        member_role = ProjectRole.objects.filter(
+            project=project,
+            user=user
+        ).first()
+
+        if not member_role:
+            return Response(
+                {"detail": "أنت لست عضواً في هذا المشروع."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if member_role.role in ['ADMIN', 'MANAGER']:
+            has_other_manager = ProjectRole.objects.filter(
+                project=project,
+                role__in=['ADMIN', 'MANAGER']
+            ).exclude(user=user).exists()
+
+            if not has_other_manager:
+                return Response(
+                    {
+                        "detail": "لا يمكنك مغادرة المشروع لأنك آخر مدير/أدمن. يجب تعيين مدير آخر أولاً."
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        with transaction.atomic():
+            Task.objects.filter(
+                project=project,
+                assigned_to=user
+            ).update(
+                assigned_to=None
+            )
+
+            member_role.delete()
+
+        return Response(success_response(
+    message="Left project successfully",
+    code="PROJECT_LEFT",
+    data={"project_id": project.id}
+), status=status.HTTP_200_OK)
+
+
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        result = ProjectService.create(serializer,self.request)
+        print(result.get("invitation_results"))
+        response_data = {
+            "project": serializer.data,
+            "invitation_results": result.get("invitation_results")
+        }
+
+        return Response(success_response(
+    message="Project created successfully",
+    code="PROJECT_CREATED",
+    data=response_data
+), status=status.HTTP_201_CREATED)
+
+
+
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response(success_response(
+    message="Project deleted successfully",
+    code="PROJECT_DELETED",
+    data=None
+), status=status.HTTP_200_OK)
+
+#######################################################################
+    """
     def perform_create(self, serializer):
         project = serializer.save()
         ProjectRole.objects.get_or_create(project=project, user=self.request.user, defaults={'role': 'ADMIN'})
@@ -69,7 +160,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             invitation_view.request.data['workspace_id'] = project.workspace.id
 
             invitation_view.send_project_invitation(invitation_view.request)
-
+"""
 
 
 

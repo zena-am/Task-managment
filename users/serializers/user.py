@@ -23,6 +23,7 @@ class UserSerializer(serializers.ModelSerializer):
         return None
 
 class UpdateProfileSerializer(serializers.ModelSerializer):
+
     class Meta:
         model = User
         fields = ['first_name', 'last_name', 'avatar', 'phone']
@@ -41,17 +42,20 @@ class UserRegisterSerializer(serializers.ModelSerializer):
 
 
 class ProjectMemberDetailSerializer(serializers.ModelSerializer):
-    phone = serializers.CharField(read_only=True)
-    avatar = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
     role = serializers.SerializerMethodField()
     total_tasks = serializers.SerializerMethodField()
     completed_tasks = serializers.SerializerMethodField()
-
+    user = UserSerializer(read_only=True)
     class Meta:
-        model = User
+        model = ProjectRole
         fields = [
-            'id', 'username', 'email', 'first_name', 'last_name',
-            'avatar', 'phone', 'role', 'total_tasks', 'completed_tasks'
+            'id',
+            'user',
+            'role',
+            'total_tasks',
+            'completed_tasks',
+            'can_delete'
         ]
     def get_can_delete(self, obj):
         request_user = self.context['request'].user
@@ -60,17 +64,17 @@ class ProjectMemberDetailSerializer(serializers.ModelSerializer):
 
     def get_role(self, obj):
         project_id = self.context.get('project_id')
-        project_role = ProjectRole.objects.filter(project_id=project_id, user=obj).first()
-        return project_role.role if project_role else 'EMPLOYEE'
+        project_role = ProjectRole.objects.filter(project_id=project_id, user=obj.user).first()
+        return obj.role if project_role else 'EMPLOYEE'
 
     def get_total_tasks(self, obj):
         project_id = self.context.get('project_id')
-        return Task.objects.filter(project_id=project_id, assigned_to=obj).count()
+        return Task.objects.filter(project_id=project_id,assigned_to=obj.user).count()
 
 
     def get_completed_tasks(self, obj):
         project_id = self.context.get('project_id')
-        return Task.objects.filter(project_id=project_id, assigned_to=obj, status='completed').count()
+        return Task.objects.filter(project_id=project_id, assigned_to=obj.user, status='completed').count()
 
 
 ###########################################################################################################
@@ -78,44 +82,43 @@ class ProjectMemberDetailSerializer(serializers.ModelSerializer):
 User = get_user_model()
 
 class WorkSpaceMemberDetailSerializer(serializers.ModelSerializer):
-    phone = serializers.CharField(read_only=True)
-    avatar = serializers.SerializerMethodField()
-
     role = serializers.SerializerMethodField()
     assigned_projects_count = serializers.SerializerMethodField()
     total_workspace_tasks = serializers.SerializerMethodField()
     completed_workspace_tasks = serializers.SerializerMethodField()
+    user = UserSerializer(read_only=True)
 
     class Meta:
-        model = User
+        model = WorkSpaceMember
         fields = [
-            'id', 'username', 'email', 'first_name', 'last_name', 'avatar', 'phone',
-            'role', 'assigned_projects_count', 'total_workspace_tasks', 'completed_workspace_tasks'
+            'id',
+            'user',
+            'role',
+            'date_joined',
+            'is_pinned',
+            'assigned_projects_count',
+            'total_workspace_tasks',
+            'completed_workspace_tasks'
         ]
 
-    def get_avatar(self, obj):
-        request = self.context.get('request')
-        if hasattr(obj, 'get_avatar_url'):
-            return obj.get_avatar_url(request)
-        return obj.avatar.url if obj.avatar else None
 
     def get_role(self, obj):
         workspace_id = self.context.get('workspace_id')
-        member_role = WorkSpaceMember.objects.filter(workspace_id=workspace_id, user=obj).first()
-        return member_role.role if member_role else 'EMPLOYEE'
+        member_role = WorkSpaceMember.objects.filter(workspace_id=workspace_id, user=obj.user).first()
+        return  obj.role if member_role else 'EMPLOYEE'
 
     def get_assigned_projects_count(self, obj):
         workspace_id = self.context.get('workspace_id')
-        return Project.objects.filter(workspace_id=workspace_id, members=obj).count()
+        return Project.objects.filter(workspace_id=workspace_id, members=obj.user).count()
 
-    def get_total_tasks(self, obj):
+    def get_total_workspace_tasks(self, obj):
         workspace_id = self.context.get('workspace_id')
-        return Task.objects.filter(project__workspace_id=workspace_id, assigned_to=obj).count()
+        return Task.objects.filter(project__workspace_id=workspace_id, assigned_to=obj.user).count()
 
-    def get_completed_tasks(self, obj):
+    def get_completed_workspace_tasks(self, obj):
         workspace_id = self.context.get('workspace_id')
         return Task.objects.filter(
             project__workspace_id=workspace_id,
-            assigned_to=obj,
+            assigned_to=obj.user,
             status='DONE'
         ).count()

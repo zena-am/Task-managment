@@ -120,6 +120,7 @@ class ReportService:
 
         return report
 
+
     @staticmethod
     def submit_technical_report(report, user):
         task = report.task

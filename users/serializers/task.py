@@ -54,7 +54,7 @@ class TaskFileSerializer(serializers.ModelSerializer):
 class TaskSerializer(serializers.ModelSerializer):
     priority_display = serializers.CharField(source='get_priority_display', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
-
+    permissions = serializers.SerializerMethodField()
     assigned_to_detail = UserSerializer(source='assigned_to', read_only=True)
     #supervisors_detail = UserSerializer(source='supervisors',many=True,read_only=True)
     supervisors_detail = serializers.SerializerMethodField()
@@ -66,18 +66,45 @@ class TaskSerializer(serializers.ModelSerializer):
     files = TaskFileSerializer(many=True, read_only=True)
 
 
-
     class Meta:
         model = Task
         fields = [
             'id', 'title', 'project', 'status', 'status_display', 'priority', 'priority_display',
             'expected_duration', 'time_expected_hours', 'actual_duration', 'actual_duration_hours',
-            'start_time', 'end_time', 'link','due_date',
+            'start_time', 'end_time', 'link','due_date','permissions',
             'assigned_to', 'assigned_to_detail','supervisors_detail', 'supervisors',  'is_overdue','images','files'
         ]
 
         read_only_fields = ['start_time', 'end_time']
+    def get_permissions(self, obj):
+        request = self.context.get('request')
+        user = request.user if request else None
 
+        if not user or not user.is_authenticated:
+            return {
+                "can_view": False,
+                "can_update": False,
+                "can_delete": False,
+                "can_assign": False,
+                "can_submit_report": False,
+            }
+
+        is_assigned = obj.assigned_to_id == user.id
+
+        is_supervisor = obj.project.projectrole_set.filter(
+            user=user,
+            role__in=["ADMIN", "MANAGER"]
+        ).exists()
+
+        is_owner = obj.project.workspace.creator_id == user.id
+
+        return {
+            "can_view": is_assigned or is_supervisor or is_owner,
+            "can_update": is_assigned,
+            "can_delete": is_owner or is_supervisor,
+            "can_assign": is_supervisor,
+            "can_submit_report": is_assigned,
+        }
     def get_supervisors_detail(self, obj):
         managers = User.objects.filter(
             projectrole__project=obj.project,

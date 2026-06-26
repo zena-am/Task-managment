@@ -7,7 +7,8 @@ from django.contrib.auth.hashers import make_password
 from django.core.validators import RegexValidator
 from users.errors.exceptions import PhoneValidationError
 import uuid
-from users.errors.messages.errorsMessages import ErrorMessages
+from users.errors.messages.ErrorCode import ErrorMessages
+
 
 class User(AbstractUser):
         email=models.EmailField(unique=True)
@@ -90,8 +91,9 @@ class WorkSpace(TimeStampedModel):
 
 class WorkSpaceMember(models.Model):
         ROLE_CHOICES = [
-        ('ADMIN', 'Admin '),('EMPLOYEE', 'employee'),('MANAGER','Manager') ]
-        role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='EMPLOYEE')
+        ('ADMIN', 'Admin'),
+        ('MEMBER', 'Member'), ]
+        role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='MEMBER')
         user = models.ForeignKey(User, on_delete=models.CASCADE)
         workspace = models.ForeignKey(WorkSpace, on_delete=models.CASCADE)
         date_joined = models.DateTimeField(auto_now_add=True)
@@ -125,7 +127,7 @@ class Project(TimeStampedModel):
 
 class ProjectRole(models.Model):
         ROLE_CHOICES = [
-        ('ADMIN', 'Admin '), ('DEV', 'Developer'),('EMPLOYEE', 'employee'),('MANAGER','Manager') ]
+        ('ADMIN', 'Admin '), ('EMPLOYEE', 'employee'),('MANAGER','Manager') ]
         role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='EMPLOYEE')
         project = models.ForeignKey(Project, on_delete=models.CASCADE)
         user = models.ForeignKey(User, on_delete=models.CASCADE)

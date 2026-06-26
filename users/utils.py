@@ -15,7 +15,7 @@ def notify_existing_user(email, sender_name, workspace_name):
         from_email=settings.EMAIL_HOST_USER,
         recipient_list=[email],
         html_message=html_content,
-        fail_silently=False,
+        fail_silently=True,
     )
 
 

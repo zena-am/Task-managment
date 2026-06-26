@@ -1,7 +1,8 @@
 from django.db.models import Case, When, Value, BooleanField
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-from users.models import WorkSpace, WorkSpaceMember
+from users.errors.messages.success import success_response
+from users.models import ProjectRole, Task, WorkSpace, WorkSpaceMember
 from users.errors.exceptions import WorkspaceCannotLeaveAsCreator
 from users.services.invitationsService import InvitationService
 
@@ -47,20 +48,22 @@ class WorkspaceServices:
 
     @staticmethod
     def update_workspace(serializer, user, data):
+        member_emails = serializer.validated_data.get("member_emails")
         workspace = serializer.save()
+        invitations_result = None
 
-        invitations_result = WorkspaceServices._send_workspace_invitations(
-            sender=user,
-            workspace=workspace,
-            data=data
-        )
+
+        if member_emails:
+            invitations_result = WorkspaceServices._send_workspace_invitations(
+                sender=user,
+                workspace=workspace,
+                data=data
+            )
 
         return {
             "workspace": workspace,
             "invitations_result": invitations_result
         }
-
-
 
 
     @staticmethod
@@ -75,9 +78,8 @@ class WorkspaceServices:
         member_setting.save()
 
         return {
-            "message": "Workspace pin status updated successfully.",
             "is_pinned": member_setting.is_pinned
-        }
+}
 
     @staticmethod
     def leave_workspace(user, workspace):
@@ -90,29 +92,49 @@ class WorkspaceServices:
             workspace=workspace
         )
 
-        member.delete()
+        with transaction.atomic():
+            tasks = Task.objects.filter(
+            assigned_to=user,
+            project__workspace=workspace
+        )
+
+            if tasks.exists():
+                tasks.update(
+                    assigned_to=None,
+                    status="UNASSIGNED"
+                )
+
+                ProjectRole.objects.filter(
+                    project__workspace=workspace,
+                    user=user
+                ).delete()
+
+                member.delete()
 
         return {
-            "message": f"You have successfully left the workspace: '{workspace.name}'."
-        }
-    @staticmethod
-    def transfer_ownership(workspace, new_owner, current_user):
+    "workspace_id": workspace.id
+}
 
-        if workspace.creator != current_user:
-            raise PermissionError("أنت لست مالك هذا الفضاء.")
+    def transfer_ownership(workspace, new_owner):
+        old_owner = workspace.creator
 
-        if not workspace.members.filter(user=new_owner).exists():
-            raise ValueError("لا يمكن نقل الملكية لشخص ليس عضواً في الفضاء.")
+        workspace.creator = new_owner
+        workspace.save()
 
-        with transaction.atomic():
-            workspace.creator = new_owner
-            workspace.save()
+        WorkSpaceMember.objects.update_or_create(
+            workspace=workspace,
+            user=new_owner,
+            defaults={"role": "ADMIN"}
+        )
 
-            WorkSpaceMember.objects.filter(workspace=workspace, user=new_owner).update(role='ADMIN')
-
-        return workspace
-
-
+        WorkSpaceMember.objects.update_or_create(
+            workspace=workspace,
+            user=old_owner,
+            defaults={"role": "MEMBER"}
+        )
+        return {
+    "new_owner_id": new_owner.id
+}
 
 
 
@@ -160,3 +182,4 @@ class WorkspaceServices:
             return value
 
         return [value]
+

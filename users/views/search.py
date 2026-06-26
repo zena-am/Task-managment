@@ -25,9 +25,9 @@ class searchUserViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def search(self, request):
         query = request.query_params.get('q', '')
-        if len(query) < 3:
+        if len(query) < 2:
             return Response([])
-        users = User.objects.select_related('profile').filter(
+        users = User.objects.filter(
         Q(username__icontains=query) |
         Q(email__icontains=query) |
         Q(first_name__icontains=query) |
