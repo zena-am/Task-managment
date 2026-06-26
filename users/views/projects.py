@@ -3,8 +3,8 @@ from drf_spectacular.utils import extend_schema
 from users.models import Project
 from rest_framework.response import Response
 from rest_framework import status, viewsets
-from users.services import ProjectService
 from django.db import transaction
+from users.services.projectservice import ProjectService
 from rest_framework.decorators import action
 from rest_framework import status
 from rest_framework.response import Response
