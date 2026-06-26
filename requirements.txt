@@ -4,6 +4,5 @@ gunicorn==23.0.0
 beautifulsoup4==4.14.3
 deep-translator==1.11.4
 requests==2.33.1
-openai-whisper==20250625
 numpy==2.4.4
 mysqlclient==2.2.4
