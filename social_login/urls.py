@@ -1,5 +1,7 @@
 from django.urls import path
 from social_login.views.firebase_auth_views import GoogleFirebaseAuthView
+from social_login.views.setPassword import SetPasswordAPIView
+from social_login.views.web import LoginAPIView
 from social_login.views.web_auth_views import GoogleTokenAuthView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from django.urls import include, path
@@ -17,6 +19,11 @@ urlpatterns = [
     path('profile/', views.profile_view, name='profile'),
     path("signup/",views.signup_view,name='signup'),
     path('auth/google/success/', views.success_page_view,name='google_login_success'),
+
+
+
+    path('api/login/', LoginAPIView.as_view(), name='login-api'),
+    path('api/set-password/', SetPasswordAPIView.as_view(), name='set-password-api'),
     #path("login/",views.login_page,name='login'),
     #path('success/', views.success_page_view, name='google_login_success'),
     ####### path('auth/google/success/', views.google_auth_receiver),

@@ -1,8 +1,17 @@
-from rest_framework.exceptions import APIException
-from rest_framework import status
-
 class ErrorMessages:
+    # =========================
+    # General
+    # =========================
+    VALIDATION_ERROR = "Validation error."
+    NOT_AUTHENTICATED = "Authentication required."
+    SERVER_ERROR = "Internal server error."
+    BUSINESS_ERROR = "Application error."
+    PERMISSION_DENIED = "You do not have permission to perform this action."
+    INVALID_OPERATION = "This operation is not allowed."
+
+    # =========================
     # User
+    # =========================
     PHONE_VALIDATION_ERROR = (
         "Please enter a valid phone number in international format "
         "(e.g., '+9665xxxxxxxx' or without '+'). Only 9 to 15 digits are allowed."
@@ -13,7 +22,9 @@ class ErrorMessages:
         "before creating or managing projects."
     )
 
+    # =========================
     # Workspace
+    # =========================
     INVALID_WORKSPACE_EMAIL = (
         "The email address is invalid. It must end with .com, .org, .net, or .edu"
     )
@@ -21,30 +32,38 @@ class ErrorMessages:
     WORKSPACE_ACCESS_DENIED = (
         "You cannot create or manage a project in a workspace you are not a member of."
     )
-    WORKSPACE_CANNOT_LEAVE_AS_CREATOR = "As the creator, you cannot leave this workspace. You must delete it or transfer ownership."
 
+    WORKSPACE_CANNOT_LEAVE_AS_CREATOR = (
+        "As the creator, you cannot leave this workspace. "
+        "You must delete it or transfer ownership."
+    )
+
+    WORKSPACE_NOT_FOUND = "Workspace not found."
+    WORKSPACE_MEMBER_ALREADY_EXISTS = "User is already a member."
+
+    # =========================
     # Project
+    # =========================
     PROJECT_NOT_MEMBER = "This user is not a member of the project."
+    PROJECT_NOT_FOUND = "Project not found."
+    USER_NOT_IN_PROJECT = "This user is not part of the project."
 
+    # =========================
     # Task
+    # =========================
+    TASK_ALREADY_COMPLETED = "Task is already completed."
     TASK_ALREADY_ASSIGNED = "Task is already assigned to a user."
     TASK_NOT_FOUND = "Task not found."
     INVALID_STATUS = "Invalid status value."
     INVALID_PRIORITY = "Invalid priority value."
-    PERMISSION_DENIED = "You do not have permission."
-    TechnicalReportMissingError="Cannot move to REVIEW: technical report is missing."
     TASK_CANNOT_REVERT = "You cannot revert a task from DONE status."
     TASK_NOT_OWNED = "You are not assigned to this task."
     TASK_NOT_ALLOWED = "You are not allowed to perform this action."
-    # General
-    PERMISSION_DENIED = "You do not have permission to perform this action."
-    USER_NOT_IN_PROJECT = "This user is not part of the project."
-    INVALID_OPERATION = "This operation is not allowed."
+    TECHNICAL_REPORT_MISSING = "Cannot move to REVIEW: technical report is missing."
 
-    #invitation
-    WORKSPACE_NOT_FOUND = "Workspace not found."
-    PROJECT_NOT_FOUND = "Project not found."
-
+    # =========================
+    # Invitation
+    # =========================
     EMAIL_REQUIRED = "Email and workspace_id are required."
     PROJECT_ID_REQUIRED = "project_id is required."
 
@@ -61,5 +80,12 @@ class ErrorMessages:
     INVITATION_RESENT_SUCCESS = "Invitation resent and updated."
 
     PROJECT_INVITATION_PROCESSED = "Project invitations and additions processed successfully."
-    WORKSPACE_MEMBER_ALREADY_EXISTS = "User is already a member."
 
+
+    USER_NOT_FOUND = "User not found."
+    INVITATION_FAILED = "Failed to process invitation."
+    USER_ADDED_SUCCESS = "User added successfully."
+    INVITATION_SENT_SUCCESS = "Invitation sent successfully."
+    INVITATION_RESENT_SUCCESS="Invitation resent successfully."
+
+    PROJECT_ALREADY_EXISTS = "A project with this name already exists in the workspace."

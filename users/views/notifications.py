@@ -4,69 +4,56 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, OpenApiExample
 
+from users.errors.messages.success import success_response
 from ..models import Notification
 from ..serializers import NotificationSerializer
+
+
 class NotificationViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = NotificationSerializer
 
     def get_queryset(self):
-
         return Notification.objects.filter(recipient=self.request.user)
-@extend_schema(
-    summary="تحديث حالة الإشعار إلى مقروء",
-    request=None,
-    responses={
-        200: OpenApiExample(
-            'Success Response',
-            value={'status': 'all marked as read'}
-        ),
-        400: OpenApiExample(
-            'Error Response',
-            value={"status": "error", "message": "error", "error_details": "string"}
-        )
-    }
-)
 
-@action(detail=True, methods=['post'])
-def mark_as_read(self, request, pk=None):
-    try:
+    @extend_schema(
+        summary="تحديث حالة الإشعار إلى مقروء",
+        request=None,
+        responses={
+            200: OpenApiExample(
+                'Success Response',
+                value={'status': 'marked as read'}
+            )
+        }
+    )
+    @action(detail=True, methods=['post'])
+    def mark_as_read(self, request, pk=None):
         notification = self.get_object()
         notification.is_read = True
-        notification.save()
-        return Response({'status': 'marked as read'}, status=status.HTTP_200_OK)
-    except Exception as e:
+        notification.save(update_fields=['is_read', 'updated_at'])
 
-        return Response({
-            "status": "error",
-            "message": "error",
-            "error_details": str(e)
-        }, status=status.HTTP_400_BAD_REQUEST)
+        return Response(success_response(
+            message="Notification marked as read successfully",
+            code="NOTIFICATION_MARKED_AS_READ",
+            data={"notification_id": notification.id, "is_read": True}
+        ), status=status.HTTP_200_OK)
 
+    @extend_schema(
+        summary="تحديث حالة كل الإشعارات إلى مقروء",
+        request=None,
+        responses={
+            200: OpenApiExample(
+                'Success Response',
+                value={'status': 'all marked as read'}
+            )
+        }
+    )
+    @action(detail=False, methods=['post'])
+    def mark_all_as_read(self, request):
+        updated_count = self.get_queryset().filter(is_read=False).update(is_read=True)
 
-@extend_schema(
-    summary="تحديث حالة كل الإشعارات إلى مقروء",
-    request=None,
-    responses={
-        200: OpenApiExample(
-            'Success Response',
-            value={'status': 'all marked as read'}
-        ),
-        400: OpenApiExample(
-            'Error Response',
-            value={"status": "error", "message": "error", "error_details": "string"}
-        )
-    }
-)
-@action(detail=False, methods=['post'])
-def mark_all_as_read(self, request):
-    try:
-        self.get_queryset().filter(is_read=False).update(is_read=True)
-        return Response({'status': 'all marked as read'}, status=status.HTTP_200_OK)
-    except Exception as e:
-
-        return Response({
-            "status": "error",
-            "message": "error",
-            "error_details": str(e)
-        }, status=status.HTTP_400_BAD_REQUEST)
+        return Response(success_response(
+            message="All notifications marked as read successfully",
+            code="ALL_NOTIFICATIONS_MARKED_AS_READ",
+            data={"updated_count": updated_count}
+        ), status=status.HTTP_200_OK)

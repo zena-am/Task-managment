@@ -1,6 +1,7 @@
 from pathlib import Path
 from datetime import timedelta
 from django.contrib.messages import constants as messages
+
 import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -8,15 +9,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-75950%b6k&a&0ma508=@1z=jz2a9x#@z)r7&&0akt(%(w_2)lb'
 
 DEBUG = True
+AUTH_USER_MODEL = 'users.User'
 
-ALLOWED_HOSTS = ["127.0.0.1", "localhost",  "192.168.116.146","0.0.0.0"]
+ALLOWED_HOSTS = ["zenasam.pythonanywhere.com","127.0.0.1", "localhost",  "192.168.116.146","192.168.116.139","0.0.0.0"]
 
 CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:8000",
     "http://localhost:8000",
+
     "http://127.0.0.1:8080",
     "http://localhost:8080",
-    "http://192.168.116.146",
+    "http://192.168.116.146"
+    "http://192.168.116.139",
 ]
 
 
@@ -64,8 +68,8 @@ AUTHENTICATION_BACKENDS = [
 
 ACCOUNT_LOGIN_METHODS = {'email', 'username'}
 ACCOUNT_EMAIL_REQUIRED = True
-ACCOUNT_SIGNUP_FIELDS = ['email', 'username', 'password1', 'password2']
-AUTH_USER_MODEL = "users.User"
+ACCOUNT_USERNAME_REQUIRED = True
+
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -130,11 +134,25 @@ SOCIALACCOUNT_PROVIDERS = {
 }
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
-
+"""
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'task_management_db',
+        'USER': 'root',
+        'PASSWORD': 'zena.com0985754203',
+        'HOST': '127.0.0.1',
+        'PORT': '3306',
+        'OPTIONS': {
+            'autocommit': True,
+        },
+    }
+}
+"""
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
     }
 }
 from datetime import timedelta
@@ -226,8 +244,6 @@ CSRF_COOKIE_HTTPONLY = False
 SECURE_REFERRER_POLICY = "no-referrer-when-downgrade"
 
 
-
-
 MESSAGE_TAGS = {
 
     messages.INFO: 'info',
@@ -249,3 +265,6 @@ EMAIL_HOST_PASSWORD = 'gszpmsngdpqzakjd'
 
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 SERVER_EMAIL = EMAIL_HOST_USER
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')

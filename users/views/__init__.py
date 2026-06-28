@@ -5,3 +5,4 @@ from .projects import ProjectViewSet
 from .notifications import NotificationViewSet
 from .tasks import TaskView,TransferSystemBot
 from .dashboardView import DashboardView
+from .members_views import WorkSpaceMemberViewSet, ProjectMemberViewSet
