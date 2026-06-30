@@ -11,7 +11,41 @@ from users.errors.exceptions import (
 from users.models import ActivityLog, Notification, ProjectRole, Task, TechnicalReportForm, User
 from users.services.invitationsService import InvitationService
 
+TASK_TRANSITIONS = {
+        "TODO": ["INPROGRESS"],
+        "INPROGRESS": ["REVIEW", "TODO"],
+        "REVIEW": ["DONE"],
+        "DONE": []
+}
+def can_change_status(user, task):
+        is_assignee = task.assigned_to_id == user.id
 
+        is_manager = ProjectRole.objects.filter(
+            project=task.project,
+            user=user,
+            role__in=["ADMIN", "MANAGER"],
+        ).exists()
+
+        return is_assignee or is_manager
+def validate_review_transition(task):
+        report = TechnicalReportForm.objects.filter(
+            task=task,
+            user=task.assigned_to,
+            status="SUBMITTED",
+        ).order_by("-created_at").first()
+
+        if not report:
+            raise TechnicalReportMissingError()
+
+        return report
+def handle_side_effects(task, user, new_status):
+        if new_status == "INPROGRESS" and not task.start_time:
+            task.start_time = timezone.now()
+
+        if new_status == "DONE":
+            task.end_time = timezone.now()
+            if task.start_time:
+                task.actual_duration = task.end_time - task.start_time
 class TaskService:
     @staticmethod
     def claim_task(task, user):
@@ -52,6 +86,8 @@ class TaskService:
 
         return task
 
+
+
     @staticmethod
     def create_task(user, serializer):
         assigned_user = serializer.validated_data.get('assigned_to')
@@ -91,6 +127,49 @@ class TaskService:
 
         return task
 
+    """
+    @staticmethod
+    def update_status(task, user, status_value):
+
+        allowed = TASK_TRANSITIONS.get(task.status, [])
+        if status_value not in allowed:
+            raise InvalidStatusError()
+
+        if not can_change_status(user, task):
+            raise PermissionDeniedError()
+
+        if status_value == "REVIEW":
+            validate_review_transition(task)
+
+            managers = User.objects.filter(
+                projectrole__project=task.project,
+                projectrole__role__in=["ADMIN", "MANAGER"],
+            ).distinct()
+
+            for manager in managers:
+                create_notification(
+                    recipient=manager,
+                    notification_type="REPORT_SUBMITTED",
+                    title="New Technical Report Submitted",
+                    message=f"Employee {user.username} submitted report for '{task.title}'",
+                    navigation_target=f"/task_details/{task.id}",
+                )
+
+        handle_side_effects(task, user, status_value)
+
+        task.status = status_value
+        task.save(
+            update_fields=[
+                "status",
+                "start_time",
+                "end_time",
+                "actual_duration",
+                "updated_at",
+            ]
+        )
+
+        return task
+    """
     @staticmethod
     def update_status(task, user, status_value):
         allowed_choices = ["TODO", "INPROGRESS", "REVIEW", "DONE"]
@@ -144,6 +223,12 @@ class TaskService:
         task.save(update_fields=["status", "start_time", "end_time", "actual_duration", "updated_at"])
 
         return task
+
+
+
+
+
+
 
     @staticmethod
     def review_technical_report(task, report, manager_user, feedback_text=None, new_status=None, quality=None):
@@ -221,6 +306,9 @@ class TaskService:
             "manager_feedbacks": report.manager_feedbacks,
             "task_status": task.status,
         }
+
+
+
 
     @staticmethod
     def perform_update(serializer, instance, user, status_value=None):

@@ -11,11 +11,18 @@ class TaskQueryService:
     @staticmethod
     def get_user_tasks(user, params):
         params = params or {}
-        queryset = Task.objects.filter(assigned_to=user).distinct()
+
+        project_id = params.get("project_id")
+
+        queryset = Task.objects.filter(assigned_to=user)
+
+        if project_id:
+            queryset = queryset.filter(project_id=project_id)
 
         queryset = TaskQueryService.filter_by_status(queryset, params.get("status"))
         queryset = TaskQueryService.filter_by_priority(queryset, params.get("priority"))
         queryset = TaskQueryService.filter_by_deadline(queryset, params.get("deadline"))
+
         return queryset.order_by("-id")
 
     @staticmethod
@@ -41,6 +48,66 @@ class TaskQueryService:
         queryset = TaskQueryService.filter_by_priority(queryset, params.get("priority"))
         queryset = TaskQueryService.filter_by_deadline(queryset, params.get("deadline"))
         return queryset.order_by("-id")
+
+    def get_tasks(user, params=None, workspace_id=None, project_id=None):
+        params = params or {}
+
+        is_manager = ProjectRole.objects.filter(
+            user=user,
+            role__in=['ADMIN', 'MANAGER'],
+        ).exists()
+
+        queryset = Task.objects.all()
+
+        # 🔥 مهم جداً: الأساس دائماً
+        if is_manager and project_id:
+            queryset = queryset.filter(project_id=project_id)
+        else:
+            queryset = queryset.filter(assigned_to=user)
+
+        # filters
+        queryset = TaskQueryService.filter_by_status(queryset, params.get("status"))
+        queryset = TaskQueryService.filter_by_priority(queryset, params.get("priority"))
+        queryset = TaskQueryService.filter_by_deadline(queryset, params.get("deadline"))
+
+        return queryset.order_by("-id")
+    @staticmethod
+    def get_tasks(user, params=None, workspace_id=None, project_id=None):
+            params = params or {}
+
+            queryset = Task.objects.all()
+
+            is_admin_ws = False
+            is_manager_project = False
+
+            if workspace_id:
+                is_admin_ws = WorkSpaceMember.objects.filter(
+                    workspace_id=workspace_id,
+                    user=user,
+                    role='ADMIN',
+                ).exists()
+
+            if project_id:
+                is_manager_project = ProjectRole.objects.filter(
+                    project_id=project_id,
+                    user=user,
+                    role__in=['ADMIN', 'MANAGER'],
+                ).exists()
+
+            # 🎯 CORE RULE
+            if is_admin_ws or is_manager_project:
+                queryset = queryset.filter(
+                    Q(project_id=project_id) if project_id else Q()
+                )
+            else:
+                queryset = queryset.filter(assigned_to=user)
+
+            # filters
+            queryset = TaskQueryService.filter_by_status(queryset, params.get("status"))
+            queryset = TaskQueryService.filter_by_priority(queryset, params.get("priority"))
+            queryset = TaskQueryService.filter_by_deadline(queryset, params.get("deadline"))
+
+            return queryset.order_by("-id")
 
     @staticmethod
     def filter_by_status(queryset, status_param):
@@ -121,6 +188,14 @@ class TaskCart:
             "review_tasks_count": stats['review_count'] or 0,
             "completed_tasks_count": stats['completed_count'] or 0,
         }
+
+
+
+
+
+
+
+
 
 
 class ProjectTaskCart:

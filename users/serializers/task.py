@@ -28,7 +28,7 @@ class TaskImageSerializer(serializers.ModelSerializer):
 class TaskFileSerializer(serializers.ModelSerializer):
     file_url = serializers.SerializerMethodField()
     file_name = serializers.SerializerMethodField()
-
+ 
     class Meta:
         model = TaskFile
         fields = ['id', 'file', 'file_url', 'file_name', 'created_at']
@@ -56,7 +56,6 @@ class TaskSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     permissions = serializers.SerializerMethodField()
     assigned_to_detail = UserSerializer(source='assigned_to', read_only=True)
-    #supervisors_detail = UserSerializer(source='supervisors',many=True,read_only=True)
     supervisors_detail = serializers.SerializerMethodField()
     supervisors = serializers.SerializerMethodField()
     time_expected_hours = serializers.SerializerMethodField()
@@ -64,18 +63,56 @@ class TaskSerializer(serializers.ModelSerializer):
     is_overdue=serializers.SerializerMethodField()
     images = TaskImageSerializer(many=True, read_only=True)
     files = TaskFileSerializer(many=True, read_only=True)
-
-
+    task_actions = serializers.SerializerMethodField()
+    state_label = serializers.SerializerMethodField()
+    role_in_project = serializers.SerializerMethodField()
     class Meta:
         model = Task
         fields = [
             'id', 'title', 'project', 'status', 'status_display', 'priority', 'priority_display',
             'expected_duration', 'time_expected_hours', 'actual_duration', 'actual_duration_hours',
-            'start_time', 'end_time', 'link','due_date','permissions',
+            'start_time', 'end_time', 'link','due_date','permissions','state_label','task_actions','role_in_project',
             'assigned_to', 'assigned_to_detail','supervisors_detail', 'supervisors',  'is_overdue','images','files'
         ]
 
         read_only_fields = ['start_time', 'end_time']
+    def get_role_in_project(self, obj):
+        request = self.context.get("request")
+        user = request.user if request else None
+
+        if not user:
+            return None
+
+        role = obj.project.projectrole_set.filter(user=user).values_list("role", flat=True).first()
+
+        return role
+
+    def get_task_actions(self, obj):
+        request = self.context.get("request")
+        user = request.user if request else None
+
+        if not user or not user.is_authenticated:
+            return {}
+
+        is_assigned = obj.assigned_to_id == user.id
+
+        is_manager = obj.project.projectrole_set.filter(
+            user=user,
+            role__in=["ADMIN", "MANAGER"]
+        ).exists()
+
+        is_creator = obj.project.workspace.creator_id == user.id
+
+        return {
+            "can_start": is_assigned and obj.status == "TODO",
+            "can_pause": is_assigned and obj.status == "INPROGRESS",
+            "can_send_to_review": is_assigned and obj.status == "INPROGRESS",
+            "can_mark_done_directly": is_manager,
+            "can_reassign": is_manager,
+            "can_mark_done_directly": is_manager,
+
+            "can_change_status":   is_assigned,
+        }
     def get_permissions(self, obj):
         request = self.context.get('request')
         user = request.user if request else None
@@ -97,14 +134,25 @@ class TaskSerializer(serializers.ModelSerializer):
         ).exists()
 
         is_owner = obj.project.workspace.creator_id == user.id
+        is_viewer = obj.project.projectrole_set.filter(user=user,role="VIEWER").exists()
 
         return {
-            "can_view": is_assigned or is_supervisor or is_owner,
+            "can_view": is_assigned or is_supervisor or is_owner  or is_viewer,
             "can_update": is_assigned,
             "can_delete": is_owner or is_supervisor,
             "can_assign": is_supervisor,
-            "can_submit_report": is_assigned,
+            "can_submit_report": self.requires_report(obj, user) and is_assigned
         }
+
+    def get_state_label(self, obj):
+        if obj.status == "TODO":
+            return "READY"
+        elif obj.status == "INPROGRESS":
+            return "ACTIVE"
+        elif obj.status == "REVIEW":
+            return "WAITING_REVIEW"
+        elif obj.status == "DONE":
+            return "COMPLETED"
     def get_supervisors_detail(self, obj):
         managers = User.objects.filter(
             projectrole__project=obj.project,
@@ -148,8 +196,15 @@ class TaskSerializer(serializers.ModelSerializer):
                     projectrole__role='MANAGER'
                 ).values_list('id', flat=True)
 
+    def requires_report(self, obj, user):
+        role = ProjectRole.objects.filter(
+            project=obj.project,
+            user=user
+        ).values_list('role', flat=True).first()
 
-###########################################################################################################
+        return role == "EMPLOYEE" and obj.assigned_to_id == user.id
+
+    ###########################################################################################################
 
 
 
@@ -225,6 +280,7 @@ class ManagerReportReviewSerializer(serializers.ModelSerializer):
             'manager_feedbacks': {'read_only': True},
             'description': {'read_only': True}
         }
+
 
 
 class TechnicalReportDetailSerializer(serializers.ModelSerializer):

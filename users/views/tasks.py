@@ -47,7 +47,8 @@ class TaskView(viewsets.ModelViewSet):
         return TaskSerializer
 
     def get_queryset(self):
-        return TaskQueryService.get_user_tasks(self.request.user, self.request.query_params)
+        return TaskQueryService.get_tasks(self.request.user, self.request.query_params)
+
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
@@ -67,6 +68,7 @@ class TaskView(viewsets.ModelViewSet):
             code="TASKS_RETRIEVED",
             data=serializer.data,
         ), status=status.HTTP_200_OK)
+
 
     def retrieve(self, request, *args, **kwargs):
         task = self.get_object()
@@ -267,50 +269,6 @@ class TechnicalReportDetailView(APIView):
         ), status=status.HTTP_200_OK)
 
 
-class AssignManagerSerializer(serializers.Serializer):
-    user_id = serializers.IntegerField()
-    role = serializers.ChoiceField(choices=['ADMIN', 'MANAGER', 'EMPLOYEE'], required=False, default='MANAGER')
-
-
-@extend_schema(tags=["عرض ونقل المشاريع التي بدون مشرف"], summary="تعيين مشرف جديد")
-class TransferSystemBot(APIView):
-    permission_classes = [IsAuthenticated]
-
-    @extend_schema(summary="عرض المشاريع التي بدون مدير", request=None, responses={200: ProjectWithoutManagerSerializer})
-    def get(self, request):
-        projects = ProjectService.get_projects_without_manager()
-        serializer = ProjectWithoutManagerSerializer(projects, many=True, context={'request': request})
-        return Response(success_response(
-            message="Projects without manager retrieved successfully",
-            code="PROJECTS_WITHOUT_MANAGER_RETRIEVED",
-            data=serializer.data,
-        ), status=status.HTTP_200_OK)
-
-    @extend_schema(request=AssignManagerSerializer, summary="تعيين الدور الجديد للموظف")
-    def post(self, request, project_id):
-        project = get_object_or_404(Project, id=project_id)
-        if not ProjectRole.objects.filter(project=project, user=request.user, role__in=['ADMIN', 'MANAGER']).exists():
-            raise PermissionDeniedError()
-
-        serializer = AssignManagerSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        target_user = get_object_or_404(User, id=serializer.validated_data["user_id"])
-        new_role = serializer.validated_data.get("role", "MANAGER")
-
-        RoleService.set_user_role(
-            project=project,
-            user=target_user,
-            performed_by=request.user,
-            new_role=new_role,
-        )
-
-        return Response(success_response(
-            message="Project role updated successfully",
-            code="PROJECT_ROLE_UPDATED",
-            data={"project_id": project.id, "user_id": target_user.id, "role": new_role},
-        ), status=status.HTTP_200_OK)
-
-
 class AssignSingleTaskSerializer(serializers.Serializer):
     assigned_to = serializers.IntegerField(required=True)
 
@@ -362,3 +320,65 @@ class TransferTaskToUser(APIView):
             code="UNASSIGNED_TASKS_RETRIEVED",
             data=serializer.data,
         ), status=status.HTTP_200_OK)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class AssignManagerSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+    role = serializers.ChoiceField(choices=['ADMIN', 'MANAGER', 'EMPLOYEE'], required=False, default='MANAGER')
+
+
+@extend_schema(tags=["عرض ونقل المشاريع التي بدون مشرف"], summary="تعيين مشرف جديد")
+class TransferSystemBot(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(summary="عرض المشاريع التي بدون مدير", request=None, responses={200: ProjectWithoutManagerSerializer})
+    def get(self, request):
+        projects = ProjectService.get_projects_without_manager()
+        serializer = ProjectWithoutManagerSerializer(projects, many=True, context={'request': request})
+        return Response(success_response(
+            message="Projects without manager retrieved successfully",
+            code="PROJECTS_WITHOUT_MANAGER_RETRIEVED",
+            data=serializer.data,
+        ), status=status.HTTP_200_OK)
+
+    @extend_schema(request=AssignManagerSerializer, summary="تعيين الدور الجديد للموظف")
+    def post(self, request, project_id):
+        project = get_object_or_404(Project, id=project_id)
+        if not ProjectRole.objects.filter(project=project, user=request.user, role__in=['ADMIN', 'MANAGER']).exists():
+            raise PermissionDeniedError()
+
+        serializer = AssignManagerSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        target_user = get_object_or_404(User, id=serializer.validated_data["user_id"])
+        new_role = serializer.validated_data.get("role", "MANAGER")
+
+        RoleService.set_user_role(
+            project=project,
+            user=target_user,
+            performed_by=request.user,
+            new_role=new_role,
+        )
+
+        return Response(success_response(
+            message="Project role updated successfully",
+            code="PROJECT_ROLE_UPDATED",
+            data={"project_id": project.id, "user_id": target_user.id, "role": new_role},
+        ), status=status.HTTP_200_OK)
+

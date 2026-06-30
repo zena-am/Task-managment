@@ -6,10 +6,25 @@ from users.models import Notification, Project, ProjectRole, Task, User
 
 class TaskTransferService:
 
-    @staticmethod
-    def get_orphaned_tasks(project):
-        return Task.objects.filter(project=project, assigned_to__isnull=True)
 
+
+    @staticmethod
+    def get_orphaned_tasks(project, params=None):
+        params = params or {}
+
+        queryset = Task.objects.filter(
+            project=project,
+            assignment_state__in=[
+                "UNASSIGNED_NEW",
+                "UNASSIGNED_RETURNED",
+            ]
+        )
+
+        state = params.get("assignment_state")
+        if state:
+            queryset = queryset.filter(assignment_state=state)
+
+        return queryset.order_by("-id")
 
     @staticmethod
     def assign_unassigned_tasks(project, new_assignee):
@@ -46,6 +61,7 @@ class TaskTransferService:
         message=f"You have been assigned to task '{task.title}' in project '{project.name}'.",
         navigation_target=f"/tasks/{task.id}"
         )
+
 
 
 class ProjectService:

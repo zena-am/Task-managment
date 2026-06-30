@@ -127,7 +127,7 @@ class Project(TimeStampedModel):
 
 class ProjectRole(models.Model):
         ROLE_CHOICES = [
-        ('ADMIN', 'Admin '), ('EMPLOYEE', 'employee'),('MANAGER','Manager') ]
+        ('ADMIN', 'Admin '), ('EMPLOYEE', 'employee'),('MANAGER','Manager'),('VIEWER', 'Viewer') ]
         role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='EMPLOYEE')
         project = models.ForeignKey(Project, on_delete=models.CASCADE)
         user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -142,7 +142,6 @@ class ProjectRole(models.Model):
 
 class Task(TimeStampedModel):
         STATUS_CHOICES = [
-                ('UNASSIGNED', 'Unassigned'),
                 ('TODO', 'To Do'),
                 ('INPROGRESS', 'In Progress'),
                 ('REVIEW', 'Review'),
@@ -155,10 +154,30 @@ class Task(TimeStampedModel):
                 ('H', 'High'),
         ]
 
+        TYPE_CHOICES = [
+        ('TASK', 'Task'),
+        ('BUG', 'Bug'),
+        ('FEATURE', 'Feature'),
+        ('IMPROVEMENT', 'Improvement')]
+
+        REPORT_CHOICES=[
+        ("NONE", "No Report"),
+        ("PENDING", "Pending"),
+        ("SUBMITTED", "Submitted"),
+        ("REJECTED", "Rejected"),
+        ("APPROVED", "Approved")]
+        ASSIGNMENT_STATE = [
+        ('UNASSIGNED_NEW', 'Not Assigned Yet'),
+        ('UNASSIGNED_RETURNED', 'Returned / Removed'),
+        ('ASSIGNED', 'Assigned'),]
+
         creator = models.ForeignKey(User, on_delete=models.CASCADE, related_name="created_tasks")
         project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='tasks')
+        workspace = models.ForeignKey(WorkSpace, on_delete=models.CASCADE, related_name="tasks")
         priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='M')
         status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='TODO')
+        type = models.CharField(max_length=30, choices=TYPE_CHOICES, default="TASK")
+        parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.CASCADE, related_name="subtasks")
         title = models.CharField(max_length=200)
         description = models.TextField()
         expected_duration = models.DurationField()
@@ -168,13 +187,32 @@ class Task(TimeStampedModel):
         link = models.URLField(max_length=500, null=True, blank=True)
         due_date = models.DateTimeField()
         assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_tasks')
-        # supervisors = models.ManyToManyField(User, related_name='supervised_tasks')
+        report_status = models.CharField(max_length=20,choices=REPORT_CHOICES,default="NONE")
+        assignment_state = models.CharField(max_length=20,choices=ASSIGNMENT_STATE,default='UNASSIGNED_NEW')
+        def save(self, *args, **kwargs):
+                if self.pk is None:
+                        if self.assigned_to is None:
+                                self.assignment_state = 'UNASSIGNED_NEW'
+                        else:
+                                self.assignment_state = 'ASSIGNED'
+                else:
+                        if self.assigned_to is None:
+                                self.assignment_state = 'UNASSIGNED_RETURNED'
+                        else:
+                                self.assignment_state = 'ASSIGNED'
 
+                super().save(*args, **kwargs)
+        def is_unassigned(self):
+                return self.assignment_state in [
+                        'UNASSIGNED_NEW',
+                        'UNASSIGNED_RETURNED'
+                ]
         class Meta:
                 indexes = [
                 models.Index(fields=["status"]),
                 models.Index(fields=["project"]),
                 models.Index(fields=["assigned_to"]),
+                models.Index(fields=["workspace"]),
                 ]
                 ordering = ["-created_at"]
 

@@ -134,7 +134,11 @@ class ProjectSerializer(serializers.ModelSerializer):
 
 class ProjectMemberRoleSerializer(serializers.Serializer):
     user_id = serializers.IntegerField()
-    role = serializers.ChoiceField(choices=['ADMIN', 'MANAGER', 'EMPLOYEE'], default='EMPLOYEE')
+    role = serializers.ChoiceField(
+        choices=['ADMIN', 'MANAGER', 'EMPLOYEE'],
+        default='EMPLOYEE',
+        required=False
+    )
 class ProjectCreateSerializer(serializers.ModelSerializer):
     members_with_roles = ProjectMemberRoleSerializer(many=True, write_only=True, required=False)
 
@@ -148,22 +152,17 @@ class ProjectCreateSerializer(serializers.ModelSerializer):
             raise ProjectNotMember()
         return value
 
-
-
     def create(self, validated_data):
         members_data = validated_data.pop('members_with_roles', [])
         project = Project.objects.create(**validated_data)
 
-
         for member_item in members_data:
-            user_id = member_item['user_id']
+            user_id = member_item.get('user_id')
             role = member_item.get('role', 'EMPLOYEE')
 
-            WorkSpaceMember.objects.get_or_create(
-                workspace=project.workspace,
-                user_id=user_id,
-                defaults={'role': 'MEMBER'}
-            )
+            if not user_id:
+                continue
+
             ProjectRole.objects.get_or_create(
                 project=project,
                 user_id=user_id,
@@ -173,3 +172,27 @@ class ProjectCreateSerializer(serializers.ModelSerializer):
         return project
 
 
+"""
+
+def create(self, validated_data):
+    members_data = validated_data.pop('members_with_roles', [])
+    project = Project.objects.create(**validated_data)
+
+
+    for member_item in members_data:
+        user_id = member_item['user_id']
+        role = member_item.get('role', 'EMPLOYEE')
+
+        WorkSpaceMember.objects.get_or_create(
+            workspace=project.workspace,
+            user_id=user_id,
+            defaults={'role': 'MEMBER'}
+        )
+        ProjectRole.objects.get_or_create(
+            project=project,
+            user_id=user_id,
+            defaults={'role': role}
+        )
+
+    return project
+    """
