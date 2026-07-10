@@ -10,7 +10,7 @@ from users.views.report import BugReportViewSet, RequestFormViewSet, TechnicalRe
 from users.views.tasks import ClaimTaskAPIView, ReviewTechnicalReportAPIView, TaskStatusUpdateAPIView, TransferTaskToUser
 from users.views.workspaces import LeaveWorkspaceAPIView, TogglePinWorkspaceAPIView, WorkspaceViewSet
 
-
+##[http://127.0.0.1:8000/user/api/docs/](http://127.0.0.1:8000/api/docs/)
 router = DefaultRouter()
 router.register(r'workspaces', WorkspaceViewSet, basename='workspace')
 router.register(r'projects', ProjectViewSet, basename='project')

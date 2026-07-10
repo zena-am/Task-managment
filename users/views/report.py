@@ -109,6 +109,7 @@ class BaseSubmissionViewSet(viewsets.ModelViewSet):
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
+        
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
@@ -173,6 +174,9 @@ class BaseSubmissionViewSet(viewsets.ModelViewSet):
             data={"id": object_id},
         ), status=status.HTTP_200_OK)
 
+
+
+
 class TechnicalReportViewSet(BaseSubmissionViewSet):
     permission_classes = [
         IsAuthenticated,
@@ -184,24 +188,30 @@ class TechnicalReportViewSet(BaseSubmissionViewSet):
     def get_queryset(self):
         user = self.request.user
 
+        project_id = self.request.query_params.get("project")
+        task_id = self.request.query_params.get("task")
+
         managed_projects = ProjectRole.objects.filter(
             user=user,
             role__in=["ADMIN", "MANAGER"]
         ).values_list("project_id", flat=True)
 
         if managed_projects.exists():
-            return self.queryset.filter(
+            queryset = self.queryset.filter(
                 Q(task__project_id__in=managed_projects) | Q(user=user)
-            ).select_related(
-                "task",
-                "user",
-                "task__project"
-            ).order_by("-created_at")
+            )
+        else:
+            queryset = self.queryset.filter(user=user)
 
-        return self.queryset.filter(
-            user=user
-        ).select_related(
+        if project_id:
+            queryset = queryset.filter(task__project_id=project_id)
+
+        if task_id:
+            queryset = queryset.filter(task_id=task_id)
+
+        return queryset.select_related(
             "task",
+            "user",
             "task__project"
         ).order_by("-created_at")
 

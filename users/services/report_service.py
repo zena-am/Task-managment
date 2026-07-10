@@ -2,7 +2,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from users.constants import create_activity_log
 from users.models import Notification, ProjectRole
-
+from users.errors.exceptions import BaseAppException
 
 
 
@@ -41,10 +41,34 @@ class ReportService:
         )
 
         report.delete()
-
     @staticmethod
     def save_technical_report_draft(serializer, user):
         task = serializer.validated_data.get("task")
+
+        latest_report = task.technical_reports.order_by("-created_at").first()
+
+        if latest_report:
+            if latest_report.status == "SUBMITTED":
+
+                raise BaseAppException(
+                detail="A submitted report is already awaiting manager review.",
+                code="REPORT_ALREADY_SUBMITTED",
+                status_code=400)
+
+            if latest_report.status == "APPROVED":
+                raise BaseAppException(
+            detail="This task already has an approved report.",
+            code="REPORT_ALREADY_APPROVED",
+            status_code=400
+)
+
+            if latest_report.status == "DRAFT":
+                raise BaseAppException(
+    detail="A draft report already exists for this task.",
+    code="REPORT_DRAFT_ALREADY_EXISTS",
+    status_code=400
+)
+
         report = serializer.save(
             user=user,
             status="DRAFT"
@@ -61,7 +85,6 @@ class ReportService:
                 "is_by_admin": False
             }
         )
-
         return report
 
     @staticmethod
@@ -88,15 +111,30 @@ class ReportService:
         task = report.task
 
         if task.assigned_to != user:
-            raise PermissionDenied(
-                "You can only submit reports for tasks assigned to you."
-            )
+            raise BaseAppException(
+    detail="You can only update your own request.",
+    code="REQUEST_UPDATE_NOT_ALLOWED",
+    status_code=403
+)
 
         if task.status != "INPROGRESS":
-            raise ValidationError(
-                "You can only submit a report when the task is in progress."
-            )
+            raise BaseAppException(
+    detail="Reports can only be submitted while the task is in progress.",
+    code="TASK_NOT_IN_PROGRESS",
+    status_code=400
+)
+        latest_report = task.technical_reports.exclude(id=report.id).order_by("-created_at").first()
 
+        if latest_report:
+            if latest_report.status == "SUBMITTED":
+                raise ValidationError(
+                    "A report is already awaiting manager review."
+                )
+
+            if latest_report.status == "APPROVED":
+                raise ValidationError(
+                    "This task already has an approved report."
+                )
         if not report.description:
             raise ValidationError(
                 "Description is required before submitting the report."

@@ -91,6 +91,7 @@ class WorkspaceServices:
 
             member.delete()
 
+
         return {"workspace_id": workspace.id}
 
     @staticmethod
