@@ -15,15 +15,32 @@ class ProjectSerializer(serializers.ModelSerializer):
     is_owner= serializers.SerializerMethodField()
     stats = serializers.SerializerMethodField()
     permissions = serializers.SerializerMethodField()
+    can_create_task = serializers.SerializerMethodField()
 
     class Meta:
         model = Project
         fields = [
             'id', 'workspace', 'workspace_name', 'name', 'description','actions','stats',
             'status', 'status_display', 'deadline', 'created_at', 'updated_at', 'members','is_owner','permissions',
+            'can_create_task',
         ]
         read_only_fields = ['created_at']
+    def get_can_create_task(self, obj):
+        request = self.context.get("request")
+        user = request.user if request else None
 
+        if not user or not user.is_authenticated:
+            return False
+
+        is_manager = ProjectRole.objects.filter(
+            project=obj,
+            user=user,
+            role__in=["ADMIN", "MANAGER"]
+        ).exists()
+
+        is_workspace_owner = obj.workspace.creator_id == user.id
+
+        return is_manager or is_workspace_owner
     def get_permissions(self, obj):
         request = self.context.get('request')
         user = request.user if request else None

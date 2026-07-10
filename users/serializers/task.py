@@ -110,11 +110,10 @@ class TaskSerializer(serializers.ModelSerializer):
             "can_mark_done_directly": is_manager,
             "can_reassign": is_manager,
             "can_mark_done_directly": is_manager,
-
             "can_change_status":   is_assigned,
         }
     def get_permissions(self, obj):
-        request = self.context.get('request')
+        request = self.context.get("request")
         user = request.user if request else None
 
         if not user or not user.is_authenticated:
@@ -124,24 +123,54 @@ class TaskSerializer(serializers.ModelSerializer):
                 "can_delete": False,
                 "can_assign": False,
                 "can_submit_report": False,
+                "can_create_task": False,
+                "can_view_reports": False,
             }
 
         is_assigned = obj.assigned_to_id == user.id
 
-        is_supervisor = obj.project.projectrole_set.filter(
-            user=user,
-            role__in=["ADMIN", "MANAGER"]
-        ).exists()
+        role = obj.project.projectrole_set.filter(
+            user=user
+        ).values_list("role", flat=True).first()
 
+        is_manager = role in ["ADMIN", "MANAGER"]
+        is_employee = role == "EMPLOYEE"
+        is_viewer = role == "VIEWER"
         is_owner = obj.project.workspace.creator_id == user.id
-        is_viewer = obj.project.projectrole_set.filter(user=user,role="VIEWER").exists()
 
         return {
-            "can_view": is_assigned or is_supervisor or is_owner  or is_viewer,
-            "can_update": is_assigned,
-            "can_delete": is_owner or is_supervisor,
-            "can_assign": is_supervisor,
-            "can_submit_report": self.requires_report(obj, user) and is_assigned
+            "can_view": (
+                is_assigned
+                or is_manager
+                or is_owner
+                or is_viewer
+            ),
+
+            # تعديل المهمة للمدير أو الأدمن فقط
+            "can_update": is_manager or is_owner,
+
+            # حذف المهمة للمدير أو الأدمن أو مالك مساحة العمل
+            "can_delete": is_manager or is_owner,
+
+            # الإسناد وإعادة الإسناد للمدير أو الأدمن فقط
+            "can_assign": is_manager or is_owner,
+
+            # إنشاء مهمة للمدير أو الأدمن أو مالك مساحة العمل
+            "can_create_task": is_manager or is_owner,
+
+            # الموظف المسند إليه فقط يرفع التقرير
+            "can_submit_report": (
+                is_employee
+                and is_assigned
+                and obj.status == "INPROGRESS"
+            ),
+
+
+            "can_view_reports": (
+                is_manager
+                or is_owner
+                or is_assigned
+            ),
         }
 
     def get_state_label(self, obj):
