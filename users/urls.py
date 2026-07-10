@@ -35,6 +35,7 @@ urlpatterns = [
     path('', include(project_router.urls)),
     path('', include(workspace_router.urls)),
     path("api/profile/", ProfileView.as_view(), name="profile"),
+
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
 
