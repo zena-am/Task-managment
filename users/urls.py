@@ -6,6 +6,7 @@ from rest_framework_nested.routers import NestedDefaultRouter
 from users.views import DashboardView, InvitationViewSet, NotificationViewSet, ProjectViewSet, searchUserViewSet, TaskView, TransferSystemBot
 from users.views.invitations import invitationsMembers
 from users.views.members_views import ProjectMemberViewSet, WorkSpaceMemberViewSet
+from users.views.profile import ProfileView
 from users.views.report import BugReportViewSet, RequestFormViewSet, TechnicalReportViewSet
 from users.views.tasks import ClaimTaskAPIView, ReviewTechnicalReportAPIView, TaskStatusUpdateAPIView, TransferTaskToUser
 from users.views.workspaces import LeaveWorkspaceAPIView, TogglePinWorkspaceAPIView, WorkspaceViewSet
@@ -33,7 +34,7 @@ urlpatterns = [
     path('', include(router.urls)),
     path('', include(project_router.urls)),
     path('', include(workspace_router.urls)),
-
+    path("api/profile/", ProfileView.as_view(), name="profile"),
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
 

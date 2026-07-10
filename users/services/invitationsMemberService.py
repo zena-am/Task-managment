@@ -4,7 +4,6 @@ from users.models import Invitation
 
 
 class InvitationMemberService:
-    """Utility service for listing invitation statistics by owner."""
 
     @staticmethod
     def get_all_invitations(user, status=None, workspace_id=None, project_id=None):
