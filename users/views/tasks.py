@@ -39,7 +39,7 @@ User = get_user_model()
 )
 class TaskView(viewsets.ModelViewSet):
     parser_classes = (MultiPartParser, FormParser)
-    permission_classes = [IsAuthenticated, TaskPermission]
+    permission_classes = [IsAuthenticated]
 
     def get_serializer_class(self):
         if self.action in ['create', 'update', 'partial_update']:
