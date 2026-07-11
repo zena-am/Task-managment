@@ -173,7 +173,6 @@ class Task(TimeStampedModel):
 
         creator = models.ForeignKey(User, on_delete=models.CASCADE, related_name="created_tasks")
         project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='tasks')
-        workspace = models.ForeignKey(WorkSpace, on_delete=models.CASCADE, related_name="tasks")
         priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='M')
         status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='TODO')
         type = models.CharField(max_length=30, choices=TYPE_CHOICES, default="TASK")
@@ -212,7 +211,6 @@ class Task(TimeStampedModel):
                 models.Index(fields=["status"]),
                 models.Index(fields=["project"]),
                 models.Index(fields=["assigned_to"]),
-                models.Index(fields=["workspace"]),
                 ]
                 ordering = ["-created_at"]
 
