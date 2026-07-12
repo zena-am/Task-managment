@@ -181,7 +181,7 @@ class BaseSubmissionViewSet(viewsets.ModelViewSet):
 class TechnicalReportViewSet(BaseSubmissionViewSet):
     permission_classes = [
         IsAuthenticated,
-        TechnicalReportPermission
+
     ]
     queryset = TechnicalReportForm.objects.all()
     serializer_class = TechnicalReportSerializer
@@ -357,8 +357,7 @@ class TechnicalReportViewSet(BaseSubmissionViewSet):
 
 class RequestFormViewSet(BaseSubmissionViewSet):
         permission_classes = [
-        IsAuthenticated,
-        RequestFormPermission
+        IsAuthenticated
         ]
 
         queryset = RequestForm.objects.all()
