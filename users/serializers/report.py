@@ -78,12 +78,14 @@ class BugReportSerializer(serializers.ModelSerializer):
 
         is_reporter = obj.user_id == user.id
 
-        is_manager = ProjectRole.objects.filter(
+        is_manager = (
+        ProjectRole.objects.filter(
             project=obj.project,
             user=user,
             role__in=["ADMIN", "MANAGER"],
         ).exists()
-
+        or obj.project.workspace.creator_id == user.id
+)
         return {
             "can_edit": (
                 is_reporter

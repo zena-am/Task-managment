@@ -14,11 +14,17 @@ class BugReportService:
 
     @staticmethod
     def _is_manager(user, project):
-        return ProjectRole.objects.filter(
+        is_project_manager = ProjectRole.objects.filter(
             project=project,
             user=user,
             role__in=["ADMIN", "MANAGER"],
         ).exists()
+
+        is_workspace_owner = (
+            project.workspace.creator_id == user.id
+        )
+
+        return is_project_manager or is_workspace_owner
 
     @staticmethod
     def _ensure_manager(user, project):
@@ -32,12 +38,16 @@ class BugReportService:
     def create_bug(serializer, user):
         project = serializer.validated_data["project"]
 
-        is_member = ProjectRole.objects.filter(
+        is_project_member = ProjectRole.objects.filter(
             project=project,
             user=user,
         ).exists()
 
-        if not is_member:
+        is_workspace_owner = (
+            project.workspace.creator_id == user.id
+        )
+
+        if not is_project_member and not is_workspace_owner:
             raise PermissionDenied(
                 "You must be a project member to report a bug."
             )
@@ -53,10 +63,22 @@ class BugReportService:
             is_active=True,
             is_deleted=False,
         ).exclude(
-            id=user.id
+            id=user.id,
         ).distinct()
 
-        for manager in managers:
+        workspace_owner = project.workspace.creator
+
+        recipients = list(managers)
+
+        if (
+            workspace_owner.id != user.id
+            and workspace_owner.is_active
+            and not workspace_owner.is_deleted
+            and workspace_owner not in recipients
+        ):
+            recipients.append(workspace_owner)
+
+        for manager in recipients:
             create_notification(
                 recipient=manager,
                 notification_type="BUG_REPORTED",
@@ -84,7 +106,6 @@ class BugReportService:
         )
 
         return bug
-
     @staticmethod
     @transaction.atomic
     def update_bug(bug, serializer, user):
