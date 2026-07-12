@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.utils import timezone
 from datetime import timedelta
 from django.db.models import Q, Count
-from ..models import ProjectRole, Task, WorkSpace, ActivityLog
+from ..models import ProjectRole, Task, WorkSpace, ActivityLog, WorkSpaceMember
 from django.utils.timesince import timesince
 from users.models import User
 
@@ -100,112 +100,135 @@ class DashboardSerializer(serializers.Serializer):
             return "Everything is running smoothly today!"
 ##################################################################
     def get_spaces(self, obj):
-        user = obj['user']
-        workspace = obj.get('workspace')
+        user = obj["user"]
+        selected_workspace = obj.get("workspace")
         now = timezone.now()
-
-        workspaces = self._get_accessible_workspaces(user, workspace)
-
-        problematic_spaces = []
         upcoming_deadline_threshold = now + timedelta(days=1)
 
-        for w in workspaces:
-            overdue_tasks_count = Task.objects.filter(
-                project__workspace=w,
+        workspaces = self._get_accessible_workspaces(
+            user,
+            selected_workspace,
+        )
+
+        workspace_health = []
+
+        for workspace in workspaces:
+            all_tasks = Task.objects.filter(
+                project__workspace=workspace
+            )
+
+            active_tasks = all_tasks.exclude(status="DONE")
+
+            overdue_tasks_count = active_tasks.filter(
                 due_date__lt=now
-            ).exclude(status='DONE').count()
+            ).count()
+
+            near_deadline_count = active_tasks.filter(
+                due_date__gte=now,
+                due_date__lte=upcoming_deadline_threshold,
+            ).count()
+
+            active_tasks_count = active_tasks.count()
+            total_tasks_count = all_tasks.count()
+            completed_tasks_count = all_tasks.filter(
+                status="DONE"
+            ).count()
+
+            progress = (
+                0
+                if total_tasks_count == 0
+                else round(
+                    completed_tasks_count * 100
+                    / total_tasks_count
+                )
+            )
+
+            workspace_role = WorkSpaceMember.objects.filter(
+                workspace=workspace,
+                user=user,
+            ).values_list(
+                "role",
+                flat=True,
+            ).first()
+
+            project_role = ProjectRole.objects.filter(
+                project__workspace=workspace,
+                user=user,
+            ).values_list(
+                "role",
+                flat=True,
+            ).first()
+
+            role = workspace_role or project_role or "MEMBER"
 
             if overdue_tasks_count > 0:
-                problematic_spaces.append({
-                    "id": w.id,
-                    "name": w.name,
-                    "overdue_count": overdue_tasks_count,
-                    "status_color": "ALERT"
-                })
-                continue
+                status_color = "ALERT"
+            elif near_deadline_count > 0:
+                status_color = "WARNING"
+            elif active_tasks_count > 0:
+                status_color = "STABLE"
+            else:
+                status_color = "COMFORT"
 
-            near_deadline_count = Task.objects.filter(
-                project__workspace=w,
-                due_date__gte=now,
-                due_date__lte=upcoming_deadline_threshold
-            ).exclude(status='DONE').count()
-
-            if near_deadline_count > 0:
-                problematic_spaces.append({
-                    "id": w.id,
-                    "name": w.name,
-                    "overdue_count": 0,
-                    "near_deadline_count": near_deadline_count,
-                    "status_color": "WARNING"
-                })
-                continue
-
-            active_tasks_count = Task.objects.filter(
-                project__workspace=w
-            ).exclude(status='DONE').count()
-
-            if active_tasks_count > 0:
-                problematic_spaces.append({
-                    "id": w.id,
-                    "name": w.name,
-                    "overdue_count": 0,
-                    "near_deadline_count": 0,
-                    "active_tasks_count": active_tasks_count,
-                    "status_color": "STABLE"
-                })
-                continue
-
-            problematic_spaces.append({
-                "id": w.id,
-                "name": w.name,
-                "overdue_count": 0,
-                "near_deadline_count": 0,
-                "active_tasks_count": 0,
-                "status_color": "COMFORT"
+            workspace_health.append({
+                "id": workspace.id,
+                "name": workspace.name,
+                "role": role,
+                "progress": progress,
+                "overdue_count": overdue_tasks_count,
+                "near_deadline_count": near_deadline_count,
+                "active_tasks_count": active_tasks_count,
+                "completed_tasks_count": completed_tasks_count,
+                "total_tasks_count": total_tasks_count,
+                "status_color": status_color,
             })
 
-        return problematic_spaces
-
+        return workspace_health
     def get_stats(self, obj):
-        user = obj['user']
-        workspace = obj.get('workspace')
+        user = obj["user"]
+        workspace = obj.get("workspace")
         now = timezone.now()
         upcoming_threshold = now + timedelta(days=1)
 
         workspaces = self._get_accessible_workspaces(user, workspace)
 
-        tasks = Task.objects.filter(
+        accessible_tasks = Task.objects.filter(
             project__workspace__in=workspaces
         )
 
-        active_tasks_count = tasks.exclude(status='DONE').count()
-
-        my_tasks_count = tasks.filter(
+        my_tasks = accessible_tasks.filter(
             assigned_to=user
-        ).exclude(status='DONE').count()
-
-        overdue_tasks_count = tasks.filter(
-            due_date__lt=now
-        ).exclude(status='DONE').count()
-
-        near_deadline_tasks_count = tasks.filter(
-            due_date__gte=now,
-            due_date__lte=upcoming_threshold
-        ).exclude(status='DONE').count()
+        )
 
         projects_count = workspaces.aggregate(
-            count=Count('projects', distinct=True)
-        )['count'] or 0
+            count=Count("projects", distinct=True)
+        )["count"] or 0
 
         return {
             "workspaces_count": workspaces.count(),
             "projects_count": projects_count,
-            "active_tasks_count": active_tasks_count,
-            "my_tasks_count": my_tasks_count,
-            "overdue_tasks_count": overdue_tasks_count,
-            "near_deadline_tasks_count": near_deadline_tasks_count,
-        }
 
+            "my_active_tasks_count": my_tasks.exclude(
+                status="DONE"
+            ).count(),
+
+            "my_overdue_tasks_count": my_tasks.filter(
+                due_date__lt=now
+            ).exclude(
+                status="DONE"
+            ).count(),
+
+            "my_near_deadline_tasks_count": my_tasks.filter(
+                due_date__gte=now,
+                due_date__lte=upcoming_threshold
+            ).exclude(
+                status="DONE"
+            ).count(),
+
+            "my_completed_tasks_count": my_tasks.filter(
+                status="DONE"
+            ).count(),
+        }
     ###################################################################
 
     def get_urgent_alerts(self, obj):

@@ -1,6 +1,6 @@
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
-
+from django.db import transaction
 from users.constants import create_activity_log, create_notification
 from users.errors.exceptions import (
     InvalidStatusError,
@@ -9,6 +9,7 @@ from users.errors.exceptions import (
     TechnicalReportMissingError,
 )
 from users.models import ActivityLog, Notification, ProjectRole, Task, TechnicalReportForm, User
+from users.services import UserAvailabilityService
 from users.services.invitationsService import InvitationService
 
 TASK_TRANSITIONS = {
@@ -47,6 +48,55 @@ def handle_side_effects(task, user, new_status):
             if task.start_time:
                 task.actual_duration = task.end_time - task.start_time
 class TaskService:
+
+    @staticmethod
+    @transaction.atomic
+    def soft_delete_task(task, user):
+        is_project_manager = ProjectRole.objects.filter(
+            project=task.project,
+            user=user,
+            role__in=["ADMIN", "MANAGER"],
+        ).exists()
+
+        is_workspace_owner = (
+            task.project.workspace.creator_id == user.id
+        )
+
+        if not is_project_manager and not is_workspace_owner:
+            raise PermissionDeniedError()
+
+        if task.is_deleted:
+            return task
+
+        task.is_deleted = True
+        task.deleted_at = timezone.now()
+        task.deleted_by = user
+
+        task.save(
+            update_fields=[
+                "is_deleted",
+                "deleted_at",
+                "deleted_by",
+                "updated_at",
+            ]
+        )
+
+        create_activity_log(
+            user=user,
+            action="TASK_DELETED",
+            action_id=task.id,
+            changes={
+                "subject_name": user.username,
+                "target_title": task.title,
+                "reason": (
+                    f"Task '{task.title}' was soft deleted "
+                    f"by {user.username}."
+                ),
+                "is_by_admin": True,
+            },
+        )
+
+        return task
     @staticmethod
     def claim_task(task, user):
         if task.assigned_to is not None:
@@ -96,6 +146,10 @@ class TaskService:
         task = serializer.save(creator=user, status=initial_status)
 
         if assigned_user:
+            UserAvailabilityService.ensure_active(
+                assigned_user,
+                action="task assignment",
+            )
             is_project_member = ProjectRole.objects.filter(project=project, user=assigned_user).exists()
             if not is_project_member:
                 InvitationService.send_project_invitation(
@@ -320,3 +374,35 @@ class TaskService:
             serializer.save(end_time=now, actual_duration=actual_duration)
         else:
             serializer.save()
+
+
+    @staticmethod
+    @transaction.atomic
+    def restore_task(task, user):
+        is_project_manager = ProjectRole.objects.filter(
+            project=task.project,
+            user=user,
+            role__in=["ADMIN", "MANAGER"],
+        ).exists()
+
+        is_workspace_owner = (
+            task.project.workspace.creator_id == user.id
+        )
+
+        if not is_project_manager and not is_workspace_owner:
+            raise PermissionDeniedError()
+
+        task.is_deleted = False
+        task.deleted_at = None
+        task.deleted_by = None
+
+        task.save(
+            update_fields=[
+                "is_deleted",
+                "deleted_at",
+                "deleted_by",
+                "updated_at",
+            ]
+        )
+
+        return task

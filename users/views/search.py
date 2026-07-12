@@ -11,7 +11,7 @@ from ..serializers import UserSerializer
 
 @extend_schema(tags=['البحث عن المستخدمين'])
 class searchUserViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = User.objects.all()
+    queryset = User.objects.filter(is_active=True)
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -31,6 +31,8 @@ class searchUserViewSet(viewsets.ReadOnlyModelViewSet):
             ), status=status.HTTP_200_OK)
 
         users = User.objects.filter(
+            is_active=True,
+        ).filter(
             Q(username__icontains=query) |
             Q(email__icontains=query) |
             Q(first_name__icontains=query) |

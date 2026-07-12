@@ -10,8 +10,22 @@ class UserSerializer(serializers.ModelSerializer):
     avatar = serializers.SerializerMethodField()
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name','avatar','phone']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name','avatar','phone','is_deleted']
 
+
+    def to_representation(self, instance):
+        if getattr(instance, "is_deleted", False):
+            return {
+                "id": instance.id,
+                "username": "Deleted User",
+                "email": None,
+                "first_name": "",
+                "last_name": "",
+                "avatar": None,
+                "phone": None,
+                "is_deleted": True,
+            }
+        return super().to_representation(instance)
 
     def get_avatar(self, obj):
         request = self.context.get('request')

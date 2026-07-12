@@ -48,7 +48,31 @@ class TaskView(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return TaskQueryService.get_tasks(self.request.user, self.request.query_params)
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path="restore",
+    )
+    def restore(self, request, pk=None):
+        task = get_object_or_404(
+            Task,
+            pk=pk,
+            is_deleted=True,
+        )
 
+        task = TaskService.restore_task(
+            task=task,
+            user=request.user,
+        )
+
+        return Response(
+            success_response(
+                message="Task restored successfully",
+                code="TASK_RESTORED",
+                data=self.get_serializer(task).data,
+            ),
+            status=status.HTTP_200_OK,
+        )
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
@@ -108,16 +132,25 @@ class TaskView(viewsets.ModelViewSet):
         kwargs['partial'] = True
         return self.update(request, *args, **kwargs)
 
+    def perform_destroy(self, instance):
+        TaskService.soft_delete_task(
+            task=instance,
+            user=self.request.user,
+        )
     def destroy(self, request, *args, **kwargs):
         task = self.get_object()
         task_id = task.id
-        self.perform_destroy(task)
-        return Response(success_response(
-            message="Task deleted successfully",
-            code="TASK_DELETED",
-            data={"task_id": task_id},
-        ), status=status.HTTP_200_OK)
 
+        self.perform_destroy(task)
+
+        return Response(
+            success_response(
+                message="Task deleted successfully",
+                code="TASK_DELETED",
+                data={"task_id": task_id},
+            ),
+            status=status.HTTP_200_OK,
+        )
     @extend_schema(tags=['المهام'], summary="جلب إحصائيات كروت الصفحة الرئيسية للمستخدم")
     @action(detail=False, methods=['get'], url_path='card')
     def getCard(self, request):
@@ -142,7 +175,7 @@ class TaskView(viewsets.ModelViewSet):
     @extend_schema(tags=['المهام'], summary="جلب قائمة المهام الخاصة بالمستخدم")
     @action(detail=False, methods=['get'], url_path='user')
     def userTask(self, request):
-        queryset = Task.objects.filter(assigned_to=request.user).distinct()
+        queryset = Task.objects.filter(assigned_to=request.user,is_deleted=False,).distinct()
         serializer = TaskSerializer(queryset, many=True, context=self.get_serializer_context())
         return Response(success_response(
             message="User tasks retrieved successfully",
@@ -157,7 +190,8 @@ class TaskView(viewsets.ModelViewSet):
             user=request.user,
             role__in=['ADMIN', 'MANAGER'],
         ).values_list('project_id', flat=True)
-        queryset = Task.objects.filter(project_id__in=managed_project_ids).distinct()
+        queryset = Task.objects.filter(project_id__in=managed_project_ids,is_deleted=False,).distinct()
+
         serializer = TaskSerializer(queryset, many=True, context=self.get_serializer_context())
         return Response(success_response(
             message="Managed tasks retrieved successfully",

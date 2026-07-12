@@ -35,7 +35,7 @@ class ProjectMemberViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         project_id = self.kwargs.get('project_pk')
-        return ProjectRole.objects.filter(project_id=project_id).select_related('user', 'project')
+        return ProjectRole.objects.filter(project_id=project_id, user__is_deleted=False, user__is_active=True).select_related('user', 'project')
 
     def get_object(self):
         project_id = self.kwargs.get("project_pk")
@@ -161,7 +161,7 @@ class WorkSpaceMemberViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         workspace_id = self.kwargs.get('workspace_pk')
-        return WorkSpaceMember.objects.filter(workspace_id=workspace_id).select_related('user', 'workspace')
+        return WorkSpaceMember.objects.filter(workspace_id=workspace_id, user__is_deleted=False, user__is_active=True).select_related('user', 'workspace')
 
     def get_object(self):
         workspace_id = self.kwargs.get('workspace_pk')

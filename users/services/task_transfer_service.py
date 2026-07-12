@@ -1,5 +1,6 @@
 from rest_framework.exceptions import ValidationError
 
+from users.services.user_availability_service import UserAvailabilityService
 from users.constants import create_activity_log
 from users.models import Notification, Project, ProjectRole, Task, User
 
@@ -44,6 +45,7 @@ class TaskTransferService:
 
     @staticmethod
     def assign_task_to_user(task, new_assignee, performed_by,project):
+        UserAvailabilityService.ensure_active(new_assignee, action="task assignment")
         task.assigned_to = new_assignee
         task.status = "TODO"
         task.save(update_fields=["assigned_to", "status", "updated_at"])
@@ -78,6 +80,7 @@ class ProjectService:
 
     @staticmethod
     def assign_new_manager(project, new_manager, performed_by):
+        UserAvailabilityService.ensure_active(new_manager, action="manager assignment")
 
         project_role = ProjectRole.objects.filter(
             project=project,
@@ -121,6 +124,7 @@ class ProjectService:
 class RoleService:
     @staticmethod
     def set_user_role(project, user, new_role, performed_by):
+        UserAvailabilityService.ensure_active(user, action="role assignment")
         project_role, created = ProjectRole.objects.get_or_create(project=project,user=user)
 
         if not project_role:
@@ -168,6 +172,7 @@ class RoleService:
 
     @staticmethod
     def transfer_tasks(project, new_assignee, performed_by):
+        UserAvailabilityService.ensure_active(new_assignee, action="task transfer")
         tasks = Task.objects.filter(project=project, assigned_to__isnull=True)
         count = tasks.count()
 

@@ -1,8 +1,10 @@
 from django.db import models
 from django.shortcuts import render
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, UserManager
+from users.managers import ActiveUserManager
 from django.db import models
 from django.utils.text import slugify
+from django.utils import timezone
 from django.contrib.auth.hashers import make_password
 from django.core.validators import RegexValidator
 from users.errors.exceptions import PhoneValidationError
@@ -15,6 +17,15 @@ class User(AbstractUser):
         avatar = models.ImageField(upload_to="profiles/", null=True, blank=True)
         phone_regex = RegexValidator(regex=r"^\+?1?\d{9,15}$",message=ErrorMessages.PHONE_VALIDATION_ERROR)
         phone = models.CharField(max_length=20,blank=True, validators=[phone_regex])
+        is_deleted = models.BooleanField(default=False, db_index=True)
+        deleted_at = models.DateTimeField(null=True, blank=True)
+
+        objects = ActiveUserManager()
+        all_objects = UserManager()
+
+        class Meta:
+                base_manager_name = "all_objects"
+                default_manager_name = "objects"
 
         @property
         def profile_data(self):
@@ -23,8 +34,28 @@ class User(AbstractUser):
                 "image": self.avatar.url if self.avatar else None,
                 "phone": self.phone}
 
+        def soft_delete(self):
+                """Deactivate the account without removing historical relations."""
+                if self.is_deleted:
+                        return False
+                self.is_deleted = True
+                self.deleted_at = timezone.now()
+                self.is_active = False
+                self.save(update_fields=["is_deleted", "deleted_at", "is_active"])
+                return True
+
+        def restore(self):
+                """Restore a previously soft-deleted account."""
+                if not self.is_deleted:
+                        return False
+                self.is_deleted = False
+                self.deleted_at = None
+                self.is_active = True
+                self.save(update_fields=["is_deleted", "deleted_at", "is_active"])
+                return True
+
 def get_default_user():
-        user, created = User.objects.get_or_create(
+        user, created = User.all_objects.get_or_create(
         username='system_bot',
         defaults={
                 'email': 'system_bot@yourdomain.local',
@@ -361,6 +392,18 @@ class Invitation(TimeStampedModel):
                         models.Index(fields=['status']),
                 ]
                 ordering = ['-created_at']
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 #######################################################################################

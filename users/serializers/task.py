@@ -55,7 +55,7 @@ class TaskSerializer(serializers.ModelSerializer):
     priority_display = serializers.CharField(source='get_priority_display', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     permissions = serializers.SerializerMethodField()
-    assigned_to_detail = UserSerializer(source='assigned_to', read_only=True)
+    assigned_to_detail = serializers.SerializerMethodField()
     supervisors_detail = serializers.SerializerMethodField()
     supervisors = serializers.SerializerMethodField()
     time_expected_hours = serializers.SerializerMethodField()
@@ -76,6 +76,11 @@ class TaskSerializer(serializers.ModelSerializer):
         ]
 
         read_only_fields = ['start_time', 'end_time']
+    def get_assigned_to_detail(self, obj):
+        if not obj.assigned_to:
+            return None
+        return UserSerializer(obj.assigned_to, context=self.context).data
+
     def get_role_in_project(self, obj):
         request = self.context.get("request")
         user = request.user if request else None
@@ -87,31 +92,54 @@ class TaskSerializer(serializers.ModelSerializer):
 
         return role
 
+
+
     def get_task_actions(self, obj):
-        request = self.context.get("request")
-        user = request.user if request else None
+            request = self.context.get("request")
+            user = request.user if request else None
 
-        if not user or not user.is_authenticated:
-            return {}
+            if not user or not user.is_authenticated:
+                return {}
 
-        is_assigned = obj.assigned_to_id == user.id
+            is_assigned = obj.assigned_to_id == user.id
 
-        is_manager = obj.project.projectrole_set.filter(
-            user=user,
-            role__in=["ADMIN", "MANAGER"]
-        ).exists()
+            is_manager = obj.project.projectrole_set.filter(
+                user=user,
+                role__in=["ADMIN", "MANAGER"],
+            ).exists()
 
-        is_creator = obj.project.workspace.creator_id == user.id
+            has_submitted_report = obj.technical_reports.filter(
+                user=user,
+                status="SUBMITTED",
+            ).exists()
 
-        return {
-            "can_start": is_assigned and obj.status == "TODO",
-            "can_pause": is_assigned and obj.status == "INPROGRESS",
-            "can_send_to_review": is_assigned and obj.status == "INPROGRESS",
-            "can_mark_done_directly": is_manager,
-            "can_reassign": is_manager,
-            "can_mark_done_directly": is_manager,
-            "can_change_status":   is_assigned,
-        }
+            return {
+                "can_start": (
+                    is_assigned
+                    and obj.status == "TODO"
+                ),
+
+                "can_pause": (
+                    is_assigned
+                    and obj.status == "INPROGRESS"
+                ),
+
+                "can_send_to_review": (
+                    is_assigned
+                    and obj.status == "INPROGRESS"
+                    and has_submitted_report
+                ),
+
+                "can_mark_done_directly": (
+                    is_manager
+                    and is_assigned
+                    and obj.status in ["TODO", "INPROGRESS"]
+                ),
+
+                "can_reassign": is_manager,
+
+                "can_change_status": is_assigned ,
+            }
     def get_permissions(self, obj):
         request = self.context.get("request")
         user = request.user if request else None
@@ -309,6 +337,21 @@ class ManagerReportReviewSerializer(serializers.ModelSerializer):
             'manager_feedbacks': {'read_only': True},
             'description': {'read_only': True}
         }
+        def validate(self, attrs):
+            status_value = attrs.get("status")
+            feedback_text = attrs.get("feedback_text")
+
+            if status_value == "REJECTED" and not feedback_text:
+                raise serializers.ValidationError({
+                    "feedback_text": "Feedback is required when rejecting a report."
+                })
+
+            if status_value not in ["APPROVED", "REJECTED"]:
+                raise serializers.ValidationError({
+                    "status": "Status must be APPROVED or REJECTED."
+                })
+
+            return attrs
 
 
 
@@ -333,6 +376,8 @@ class TechnicalReportDetailSerializer(serializers.ModelSerializer):
             'manager_feedbacks',
         ]
     def get_employee_name(self, obj):
+        if obj.user.is_deleted:
+            return "Deleted User"
         return obj.user.get_full_name() or obj.user.username
 
 
@@ -372,3 +417,31 @@ class ProjectWithoutManagerSerializer(serializers.ModelSerializer):
         return obj.tasks.filter(
             assigned_to__isnull=True
         ).count()
+
+"""
+    def get_task_actions(self, obj):
+        request = self.context.get("request")
+        user = request.user if request else None
+
+        if not user or not user.is_authenticated:
+            return {}
+
+        is_assigned = obj.assigned_to_id == user.id
+
+        is_manager = obj.project.projectrole_set.filter(
+            user=user,
+            role__in=["ADMIN", "MANAGER"]
+        ).exists()
+
+        is_creator = obj.project.workspace.creator_id == user.id
+
+        return {
+            "can_start": is_assigned and obj.status == "TODO",
+            "can_pause": is_assigned and obj.status == "INPROGRESS",
+            "can_send_to_review": is_assigned and obj.status == "INPROGRESS",
+            "can_mark_done_directly": is_manager,
+            "can_reassign": is_manager,
+            "can_mark_done_directly": is_manager,
+            "can_change_status":   is_assigned,
+        }
+        """

@@ -43,6 +43,48 @@ class ProfileIncompleteError(BaseAppException):
         )
 
 
+
+
+class AccountAlreadyDeletedError(BaseAppException):
+    def __init__(self):
+        super().__init__(
+            detail="This account has already been deleted.",
+            code="ACCOUNT_ALREADY_DELETED",
+            status_code=400,
+        )
+
+
+class AccountDeletedError(BaseAppException):
+    def __init__(self):
+        super().__init__(
+            detail="This account has been deleted and cannot be used.",
+            code="ACCOUNT_DELETED",
+            status_code=403,
+        )
+
+
+class AccountOwnsWorkspacesError(BaseAppException):
+    def __init__(self):
+        super().__init__(
+            detail="Transfer ownership of your workspaces before deleting your account.",
+            code="ACCOUNT_OWNS_WORKSPACES",
+            status_code=400,
+        )
+
+
+class AccountIsLastProjectManagerError(BaseAppException):
+    def __init__(self, project_names=None):
+        names = ", ".join(project_names or [])
+        detail = "Assign another manager before deleting your account."
+        if names:
+            detail = f"Assign another manager for: {names}."
+        super().__init__(
+            detail=detail,
+            code="ACCOUNT_IS_LAST_PROJECT_MANAGER",
+            status_code=400,
+        )
+
+
 # =========================
 # PERMISSIONS
 # =========================

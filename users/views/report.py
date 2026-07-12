@@ -3,6 +3,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from users.permissions import  RequestFormPermission, TechnicalReportPermission
 from users.errors.messages.success import success_response
 from users.serializers.report import ManagerRequestReviewSerializer
+from users.services.bugService import BugReportService
 from ..models import ProjectRole, TechnicalReportForm, RequestForm, BugReportForm, Invitation
 from ..serializers import (TechnicalReportSerializer, RequestFormSerializer,BugReportSerializer, InvitationSerializer)
 from ..services.report_service import FormService, ReportService
@@ -463,27 +464,135 @@ class RequestFormViewSet(BaseSubmissionViewSet):
 
 
 ######################################################################################################
-class BugReportViewSet(BaseSubmissionViewSet):
 
+class BugReportViewSet(BaseSubmissionViewSet):
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
     queryset = BugReportForm.objects.all()
     serializer_class = BugReportSerializer
 
     def get_queryset(self):
         user = self.request.user
 
-        managed_projects = ProjectRole.objects.filter(
+        managed_project_ids = ProjectRole.objects.filter(
             user=user,
-            role__in=["ADMIN", "MANAGER"]
-        ).values_list("project_id", flat=True)
+            role__in=["ADMIN", "MANAGER"],
+        ).values_list(
+            "project_id",
+            flat=True,
+        )
 
-        if managed_projects.exists():
-            return self.queryset.filter(
-                project_id__in=managed_projects
-            ).select_related(
-                "project",
-                "user",
+        return self.queryset.filter(
+            Q(user=user)
+            | Q(project_id__in=managed_project_ids)
+            | Q(task__assigned_to=user)
+        ).select_related(
+            "project",
+            "user",
+            "task",
+            "task__assigned_to",
+        ).distinct().order_by("-created_at")
+
+    def perform_create(self, serializer):
+        BugReportService.create_bug(
+            serializer=serializer,
+            user=self.request.user,
+        )
+
+    def perform_update(self, serializer):
+        BugReportService.update_bug(
+            bug=self.get_object(),
+            serializer=serializer,
+            user=self.request.user,
+        )
+
+    def perform_destroy(self, instance):
+        BugReportService.delete_bug(
+            bug=instance,
+            user=self.request.user,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="convert-to-task",
+    )
+    def convert_to_task(self, request, pk=None):
+        bug = self.get_object()
+
+        serializer = BugToTaskSerializer(
+            data=request.data,
+            context={
+                "request": request,
+                "bug": bug,
+            },
+        )
+        serializer.is_valid(raise_exception=True)
+
+        task = BugReportService.convert_to_task(
+            bug=bug,
+            manager=request.user,
+            assigned_to=serializer.validated_data.get(
                 "assigned_to"
-            ).order_by("-created_at")
+            ),
+            expected_duration=serializer.validated_data[
+                "expected_duration"
+            ],
+            due_date=serializer.validated_data["due_date"],
+            priority=serializer.validated_data.get("priority"),
+        )
 
-        return self.queryset.filter(user=user).select_related("project","assigned_to").order_by("-created_at")
+        return Response(
+            success_response(
+                message="Bug report converted to task successfully.",
+                code="BUG_CONVERTED_TO_TASK",
+                data={
+                    "bug_id": bug.id,
+                    "task_id": task.id,
+                    "assigned_to": task.assigned_to_id,
+                },
+            ),
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path="verify",
+    )
+    def verify(self, request, pk=None):
+        bug = BugReportService.verify_fix(
+            bug=self.get_object(),
+            user=request.user,
+        )
+
+        return Response(
+            success_response(
+                message="Bug fix verified successfully.",
+                code="BUG_VERIFIED",
+                data=self.get_serializer(bug).data,
+            ),
+            status=status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path="close",
+    )
+    def close(self, request, pk=None):
+        bug = BugReportService.close_bug(
+            bug=self.get_object(),
+            manager=request.user,
+            result=request.data.get("result"),
+        )
+
+        return Response(
+            success_response(
+                message="Bug report closed successfully.",
+                code="BUG_CLOSED",
+                data=self.get_serializer(bug).data,
+            ),
+            status=status.HTTP_200_OK,
+        )
