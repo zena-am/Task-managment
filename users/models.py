@@ -341,6 +341,13 @@ class BugReportForm(TimeStampedModel):
         ('FIXED', 'Fixed'),
         ('VERIFIED', 'Verified'),
         ('CLOSED', 'Closed'),]
+        task = models.ForeignKey(
+                Task,
+                on_delete=models.SET_NULL,
+                related_name="bug_reports",
+                null=True,
+                blank=True,
+                )
         user = models.ForeignKey(User, on_delete=models.CASCADE)
         project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='bug_reports_task')
         status = models.CharField(max_length=10, choices=BUG_STATUS, default='OPEN')

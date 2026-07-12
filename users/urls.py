@@ -8,6 +8,7 @@ from users.views.invitations import invitationsMembers
 from users.views.members_views import ProjectMemberViewSet, WorkSpaceMemberViewSet
 from users.views.profile import ProfileView
 from users.views.report import BugReportViewSet, RequestFormViewSet, TechnicalReportViewSet
+from users.views.searchItems import ProjectSearchViewSet, WorkspaceSearchViewSet
 from users.views.tasks import ClaimTaskAPIView, ReviewTechnicalReportAPIView, TaskStatusUpdateAPIView, TransferTaskToUser
 from users.views.workspaces import LeaveWorkspaceAPIView, TogglePinWorkspaceAPIView, WorkspaceViewSet
 
@@ -23,7 +24,9 @@ router.register(r'TaskView', TaskView, basename='TaskView')
 router.register(r'technical-reports', TechnicalReportViewSet, basename='technical-report')
 router.register(r'requests', RequestFormViewSet, basename='request')
 router.register(r'bug-reports', BugReportViewSet, basename='bug-report')
+router.register(r"workspace-search",WorkspaceSearchViewSet,basename="workspace-search",)
 
+router.register(r"project-search",ProjectSearchViewSet,basename="project-search",)
 project_router = NestedDefaultRouter(router, r'projects', lookup='project')
 project_router.register(r'members', ProjectMemberViewSet, basename='project-members')
 
