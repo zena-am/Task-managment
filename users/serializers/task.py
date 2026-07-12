@@ -66,9 +66,14 @@ class TaskSerializer(serializers.ModelSerializer):
     task_actions = serializers.SerializerMethodField()
     state_label = serializers.SerializerMethodField()
     role_in_project = serializers.SerializerMethodField()
+    deleted_by_name = serializers.SerializerMethodField()
     class Meta:
         model = Task
         fields = [
+            "is_deleted",
+            "deleted_at",
+            "deleted_by",
+            "deleted_by_name",
             'id', 'title', 'project', 'status', 'status_display', 'priority', 'priority_display',
             'expected_duration', 'time_expected_hours', 'actual_duration', 'actual_duration_hours',
             'start_time', 'end_time', 'link','due_date','permissions','state_label','task_actions','role_in_project',
@@ -76,6 +81,14 @@ class TaskSerializer(serializers.ModelSerializer):
         ]
 
         read_only_fields = ['start_time', 'end_time']
+    def get_deleted_by_name(self, obj):
+        if not obj.deleted_by:
+            return None
+
+        return (
+            obj.deleted_by.get_full_name()
+            or obj.deleted_by.username
+        )
     def get_assigned_to_detail(self, obj):
         if not obj.assigned_to:
             return None

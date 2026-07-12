@@ -1,6 +1,7 @@
 from django.db import models
 from django.shortcuts import render
 from django.contrib.auth.models import AbstractUser, UserManager
+from config import settings
 from users.managers import ActiveUserManager
 from django.db import models
 from django.utils.text import slugify
@@ -219,6 +220,23 @@ class Task(TimeStampedModel):
         assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_tasks')
         report_status = models.CharField(max_length=20,choices=REPORT_CHOICES,default="NONE")
         assignment_state = models.CharField(max_length=20,choices=ASSIGNMENT_STATE,default='UNASSIGNED_NEW')
+        is_deleted = models.BooleanField(
+        default=False,
+        db_index=True,
+        )
+
+        deleted_at = models.DateTimeField(
+                null=True,
+                blank=True,
+        )
+
+        deleted_by = models.ForeignKey(
+                settings.AUTH_USER_MODEL,
+                on_delete=models.SET_NULL,
+                null=True,
+                blank=True,
+                related_name="soft_deleted_tasks",
+        )
         def save(self, *args, **kwargs):
                 if self.pk is None:
                         if self.assigned_to is None:
