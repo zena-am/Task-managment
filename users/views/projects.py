@@ -20,7 +20,7 @@ from ..serializers import ProjectSerializer, ProjectCreateSerializer
     destroy=extend_schema(tags=['المشاريع'], summary="حذف مشروع"),
 )
 class ProjectViewSet(viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated, IsProjectManagerOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated]
     serializer_class = ProjectSerializer
 
     def get_serializer_class(self):

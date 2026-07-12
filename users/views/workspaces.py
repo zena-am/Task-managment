@@ -21,7 +21,7 @@ from ..permissions import IsWorkspaceOwnerOrReadOnly
     destroy=extend_schema(tags=['فضاءات العمل'], summary="(للمدير) حذف فضاء العمل"),
 )
 class WorkspaceViewSet(viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated, IsWorkspaceOwnerOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_serializer_class(self):
         if self.action in ['create', 'update', 'partial_update']:
