@@ -36,7 +36,6 @@ class User(AbstractUser):
                 "phone": self.phone}
 
         def soft_delete(self):
-                """Deactivate the account without removing historical relations."""
                 if self.is_deleted:
                         return False
                 self.is_deleted = True
@@ -46,7 +45,6 @@ class User(AbstractUser):
                 return True
 
         def restore(self):
-                """Restore a previously soft-deleted account."""
                 if not self.is_deleted:
                         return False
                 self.is_deleted = False
@@ -114,6 +112,9 @@ class WorkSpace(TimeStampedModel):
         members = models.ManyToManyField(User, through='WorkSpaceMember')
         name=models.CharField(max_length=255)
         description=models.TextField()
+        is_archived = models.BooleanField(default=False, db_index=True)
+        archived_at = models.DateTimeField(null=True, blank=True)
+        archived_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="archived_workspaces")
         #is_pinned = models.BooleanField(default=False)
         class Meta:
                 indexes = [
@@ -149,6 +150,9 @@ class Project(TimeStampedModel):
         description=models.TextField(null=False)
         members = models.ManyToManyField(User, through='ProjectRole')
         status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+        is_archived = models.BooleanField(default=False, db_index=True)
+        archived_at = models.DateTimeField(null=True, blank=True)
+        archived_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="archived_projects")
 
         class Meta:
                 indexes = [
@@ -224,6 +228,9 @@ class Task(TimeStampedModel):
         default=False,
         db_index=True,
         )
+        is_archived = models.BooleanField(default=False, db_index=True)
+        archived_at = models.DateTimeField(null=True, blank=True)
+        archived_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="archived_tasks")
 
         deleted_at = models.DateTimeField(
                 null=True,
@@ -476,7 +483,14 @@ class ActivityLog(TimeStampedModel):
         ('REPORT_DRAFT_UPDATED', 'Report Draft Updated'),
         ('REPORT_DELETED', 'Report Deleted'),
         ('REPORT_SUBMITTED', 'Report Submitted'),
-        ('ROLE_UPDATED','ROLE_UPDATED')
+        ('ROLE_UPDATED','ROLE_UPDATED'),
+        ('BULK_TASK_UPDATED', 'Bulk Task Updated'),
+        ('WORKSPACE_ARCHIVED', 'Workspace Archived'),
+        ('WORKSPACE_RESTORED', 'Workspace Restored'),
+        ('PROJECT_ARCHIVED', 'Project Archived'),
+        ('PROJECT_RESTORED', 'Project Restored'),
+        ('TASK_ARCHIVED', 'Task Archived'),
+        ('TASK_RESTORED', 'Task Restored')
 
         ]
         user=models.ForeignKey(User,on_delete=models.CASCADE)

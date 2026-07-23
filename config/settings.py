@@ -14,12 +14,13 @@ AUTH_USER_MODEL = 'users.User'
 ALLOWED_HOSTS = ["zenasam.pythonanywhere.com","127.0.0.1", "localhost",  "192.168.116.146","192.168.116.139","0.0.0.0"]
 
 CSRF_TRUSTED_ORIGINS = [
+    "https://zenasam.pythonanywhere.com",
     "http://127.0.0.1:8000",
     "http://localhost:8000",
 
     "http://127.0.0.1:8080",
     "http://localhost:8080",
-    "http://192.168.116.146"
+    "http://192.168.116.146",
     "http://192.168.116.139",
 ]
 
@@ -37,6 +38,7 @@ DEBUG = True
 
 
 INSTALLED_APPS = [
+    'dashboard.apps.DashboardConfig',
     'users',
     'social_login',
 
@@ -268,3 +270,11 @@ SERVER_EMAIL = EMAIL_HOST_USER
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+DEBUG = False
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+
+SESSION_COOKIE_SAMESITE = "Lax"
+CSRF_COOKIE_SAMESITE = "Lax"
