@@ -11,9 +11,13 @@ SECRET_KEY = 'django-insecure-75950%b6k&a&0ma508=@1z=jz2a9x#@z)r7&&0akt(%(w_2)lb
 DEBUG = True
 AUTH_USER_MODEL = 'users.User'
 
-ALLOWED_HOSTS = ["zenasam.pythonanywhere.com","127.0.0.1", "localhost",  "192.168.116.146","192.168.116.139","0.0.0.0"]
+ALLOWED_HOSTS = [  "http://localhost:5500",
+    "http://127.0.0.1:5500","zenasam.pythonanywhere.com","127.0.0.1", "localhost",  "192.168.116.146","192.168.116.139","0.0.0.0"]
 
 CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5500",
+    "http://127.0.0.1:5500",
+
     "https://zenasam.pythonanywhere.com",
     "http://127.0.0.1:8000",
     "http://localhost:8000",
@@ -213,7 +217,7 @@ SITE_ID = 1
 STATIC_URL = 'static/'
 
 
-
+CORS_ALLOW_CREDENTIALS = True
 
 REST_FRAMEWORK = {
         'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
