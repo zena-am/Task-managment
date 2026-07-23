@@ -28,6 +28,20 @@ CSRF_TRUSTED_ORIGINS = [
     "http://192.168.116.139",
 ]
 
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5500",
+    "http://127.0.0.1:5500",
+
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+
+    "https://zenasam.pythonanywhere.com",
+]
+
+CORS_ALLOW_CREDENTIALS = True
 
 SECURE_REFERRER_POLICY = "no-referrer-when-downgrade"
 # Quick-start development settings - unsuitable for production
