@@ -1,5 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 
 from users.constants import create_activity_log, create_notification
 from users.errors.exceptions import (
@@ -55,7 +57,48 @@ class InvitationService:
                 "email": email.strip().lower() if isinstance(email, str) else email,
                 "role": role,
             })
-        return normalized
+        deduplicated = []
+        seen = set()
+        for item in normalized:
+            email = item.get("email")
+            key = email.lower() if isinstance(email, str) else email
+            if key in seen:
+                continue
+            seen.add(key)
+            deduplicated.append(item)
+        return deduplicated
+
+    @staticmethod
+    def _validate_email(email):
+        if not isinstance(email, str) or not email.strip():
+            return None, {
+                "type": "INVALID_EMAIL",
+                "email": email,
+                "message": "Email is required",
+                "code": "INVALID_EMAIL",
+            }
+        normalized = email.strip().lower()
+        try:
+            validate_email(normalized)
+        except ValidationError:
+            return None, {
+                "type": "INVALID_EMAIL_FORMAT",
+                "email": normalized,
+                "message": "Invalid email format",
+                "code": "INVALID_EMAIL_FORMAT",
+            }
+        return normalized, None
+
+    @staticmethod
+    def _self_invitation_error(sender, email):
+        if sender.email and sender.email.strip().lower() == email:
+            return {
+                "type": "SELF_INVITATION_NOT_ALLOWED",
+                "email": email,
+                "message": "You cannot invite yourself",
+                "code": "SELF_INVITATION_NOT_ALLOWED",
+            }
+        return None
 
     @staticmethod
     def _workspace_role(role):
@@ -137,19 +180,28 @@ class InvitationService:
             role = InvitationService._workspace_role(
                 item.get("role") or data.get("role") or "MEMBER"
             )
-            if not email:
-                error_list.append({
-                    "type": "INVALID_EMAIL",
-                    "email": None,
-                    "message": "Email is required",
-                    "code": "INVALID_EMAIL",
-                })
+            email, email_error = InvitationService._validate_email(email)
+            if email_error:
+                error_list.append(email_error)
+                continue
+            self_error = InvitationService._self_invitation_error(sender, email)
+            if self_error:
+                error_list.append(self_error)
                 continue
 
             receiver = InvitationService._resolve_receiver(email)
             unavailable = InvitationService._unavailable_error(receiver, email=email)
             if unavailable:
                 error_list.append(unavailable)
+                continue
+
+            if receiver and WorkSpaceMember.objects.filter(workspace=workspace, user=receiver).exists():
+                error_list.append({
+                    "type": "MEMBER_ALREADY_IN_WORKSPACE",
+                    "email": email,
+                    "message": "User is already a workspace member",
+                    "code": "MEMBER_ALREADY_IN_WORKSPACE",
+                })
                 continue
 
             existing = Invitation.objects.filter(
@@ -227,6 +279,22 @@ class InvitationService:
                 if unavailable:
                     error_list.append(unavailable)
                     continue
+                if user_to_add.id == sender.id:
+                    error_list.append({
+                        "type": "SELF_INVITATION_NOT_ALLOWED", "id": user_id,
+                        "message": "You cannot add yourself through invitations",
+                        "code": "SELF_INVITATION_NOT_ALLOWED",
+                    })
+                    continue
+
+                existing_project_role = ProjectRole.objects.filter(project=project, user=user_to_add).first()
+                if existing_project_role and existing_project_role.role == user_role:
+                    error_list.append({
+                        "type": "MEMBER_ALREADY_IN_PROJECT", "id": user_id,
+                        "message": "User is already a project member with this role",
+                        "code": "MEMBER_ALREADY_IN_PROJECT",
+                    })
+                    continue
 
                 WorkSpaceMember.objects.get_or_create(
                     workspace=project.workspace, user=user_to_add,
@@ -235,10 +303,19 @@ class InvitationService:
                 project_role, created = ProjectRole.objects.get_or_create(
                     project=project, user=user_to_add, defaults={"role": user_role}
                 )
-                if not created and project_role.role != user_role:
-                    project_role.role = user_role
-                    project_role.save(update_fields=["role"])
+                if not created:
+                    error_list.append({
+                        "type": "MEMBER_ALREADY_IN_PROJECT", "id": user_id,
+                        "message": "User is already a project member; use the role update endpoint",
+                        "code": "MEMBER_ALREADY_IN_PROJECT",
+                    })
+                    continue
 
+                create_activity_log(
+                    user=sender, action="MEMBER_ADDED", action_id=project.id,
+                    subject_name=user_to_add.username, target_title=project.name,
+                    reason=f"User added to project as {user_role}", is_by_admin=True,
+                )
                 create_notification(
                     recipient=user_to_add, notification_type="SYSTEM_ALERT",
                     title="Project Access Updated",
@@ -253,17 +330,28 @@ class InvitationService:
             for item in email_items:
                 email = item.get("email")
                 item_role = InvitationService._project_role(item.get("role") or role)
-                if not email:
-                    error_list.append({
-                        "type": "INVALID_EMAIL", "email": None,
-                        "message": "Email is required", "code": "INVALID_EMAIL",
-                    })
+                email, email_error = InvitationService._validate_email(email)
+                if email_error:
+                    error_list.append(email_error)
+                    continue
+                self_error = InvitationService._self_invitation_error(sender, email)
+                if self_error:
+                    error_list.append(self_error)
                     continue
 
                 receiver = InvitationService._resolve_receiver(email)
                 unavailable = InvitationService._unavailable_error(receiver, email=email)
                 if unavailable:
                     error_list.append(unavailable)
+                    continue
+
+                if receiver and ProjectRole.objects.filter(project=project, user=receiver).exists():
+                    error_list.append({
+                        "type": "MEMBER_ALREADY_IN_PROJECT",
+                        "email": email,
+                        "message": "User is already a project member",
+                        "code": "MEMBER_ALREADY_IN_PROJECT",
+                    })
                     continue
 
                 existing = Invitation.objects.filter(
@@ -337,12 +425,13 @@ class InvitationService:
                 subject_name=user.username, target_title=invitation.workspace.name,
                 reason="User accepted the invitation", is_by_admin=False,
             )
-            create_notification(
-                recipient=invitation.sender, notification_type="INVITATION_ACCEPTED",
-                title="Invitation Accepted",
-                message=f"{user.username} accepted your invitation to {invitation.workspace.name}.",
-                navigation_target=f"/workspaces/{invitation.workspace.id}",
-            )
+            if invitation.sender_id != user.id:
+                create_notification(
+                    recipient=invitation.sender, notification_type="INVITATION_ACCEPTED",
+                    title="Invitation Accepted",
+                    message=f"{user.username} accepted your invitation to {invitation.workspace.name}.",
+                    navigation_target=f"/workspaces/{invitation.workspace.id}",
+                )
         return {"invitation_id": invitation.id, "status": "ACCEPTED"}
 
     @staticmethod
@@ -359,10 +448,11 @@ class InvitationService:
             subject_name=user.username, target_title=invitation.workspace.name,
             reason="User rejected the invitation", is_by_admin=False,
         )
-        create_notification(
-            recipient=invitation.sender, notification_type="INVITATION_REJECTED",
-            title="Invitation Rejected",
-            message=f"{user.username} rejected your invitation to {invitation.workspace.name}.",
-            navigation_target=f"/workspaces/{invitation.workspace.id}",
-        )
+        if invitation.sender_id != user.id:
+            create_notification(
+                recipient=invitation.sender, notification_type="INVITATION_REJECTED",
+                title="Invitation Rejected",
+                message=f"{user.username} rejected your invitation to {invitation.workspace.name}.",
+                navigation_target=f"/workspaces/{invitation.workspace.id}",
+            )
         return {"invitation_id": invitation.id, "status": "REJECTED"}

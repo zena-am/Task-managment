@@ -19,7 +19,7 @@ from rest_framework import viewsets, permissions, status
 from django.db.models import Q
 from drf_spectacular.utils import (extend_schema,extend_schema_view,OpenApiExample,OpenApiResponse)
 from drf_spectacular.types import OpenApiTypes
-
+from users.services.leave_service import LeaveRequestService
 
 @extend_schema_view(
 
@@ -270,7 +270,7 @@ class TechnicalReportViewSet(BaseSubmissionViewSet):
 
         return Response(
     success_response(
-        message="تم إرسال التقرير التقني بنجاح",
+        message="report sent successfully ",
         code="TECHNICAL_REPORT_SUBMITTED_SUCCESS",
         data=serializer.data
     ),
@@ -403,6 +403,78 @@ class RequestFormViewSet(BaseSubmissionViewSet):
                 request_form=instance,
                 user=self.request.user
             )
+
+
+
+
+        @extend_schema(
+            tags=["طلبات الموظفين"],
+            summary="تحليل تأثير طلب الإجازة على المهام",
+            description=(
+                "يحلل جميع مهام صاحب طلب الإجازة داخل المشروع، "
+                "وينشئ LeaveTaskAction لكل مهمة، ثم يحدد "
+                "المهام التي تحتاج إلى تدخل المدير."
+            ),
+            request=None,
+            responses={200: dict},
+        )
+        @action(
+            detail=True,
+            methods=["post"],
+            url_path="analyze-leave-impact",
+        )
+        def analyze_leave_impact(
+            self,
+            request,
+            pk=None,
+        ):
+            leave_request = self.get_object()
+
+            result = (
+                LeaveRequestService.analyze_leave_impact(
+                    leave_request=leave_request,
+                    manager_user=request.user,
+                )
+            )
+
+            return Response(
+                success_response(
+                    message=(
+                        "Leave impact analyzed successfully."
+                    ),
+                    code="LEAVE_IMPACT_ANALYZED",
+                    data=result,
+                ),
+                status=status.HTTP_200_OK,
+            )
+
+
+        @action(
+            detail=True,
+            methods=["post"],
+            url_path="return-from-leave",
+        )
+        def return_from_leave(self, request, pk=None):
+            leave_request = self.get_object()
+
+            result = LeaveRequestService.return_from_leave(
+                leave_request=leave_request,
+                user=request.user,
+            )
+
+            return Response({
+                "success": True,
+                "code": "LEAVE_COMPLETED",
+                "message": "Leave completed successfully.",
+                "data": result,
+            })
+
+
+
+
+
+
+
         @extend_schema(
             tags=["طلبات الموظفين"],
             summary="قبول أو رفض طلب موظف",

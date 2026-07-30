@@ -1,5 +1,7 @@
 from rest_framework import serializers
-from ..models import ProjectRole, TechnicalReportForm, RequestForm, BugReportForm
+
+from users.views.tasks import User
+from ..models import LeaveTaskAction, ProjectRole, TechnicalReportForm, RequestForm, BugReportForm
 
 class TechnicalReportSerializer(serializers.ModelSerializer):
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
@@ -7,15 +9,220 @@ class TechnicalReportSerializer(serializers.ModelSerializer):
     class Meta:
         model = TechnicalReportForm
         fields = [ 'id','task', 'description', 'image', 'file', 'duration_time', 'url', 'quality', 'user', 'status', 'manager_feedback','manager_feedbacks',]
-        read_only_fields = ['id','status', 'manager_feedback', 'manager_feedbacks']
+        read_only_fields = ['id','status', 'manager_feedback', 'manager_feedbacks','s']
 
 class RequestFormSerializer(serializers.ModelSerializer):
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
 
     class Meta:
         model = RequestForm
-        fields = [ 'id','request_type', 'priority', 'project', 'title', 'file', 'image', 'time', 'reason', 'user','status', 'manager_feedback']
+        fields = ['leave_start','leave_end' ,'id','request_type', 'priority', 'project', 'title', 'file', 'image', 'time', 'reason', 'user','status', 'manager_feedback']
         read_only_fields = ['id','status', 'manager_feedback']
+
+    def validate(self, attrs):
+        instance = getattr(self, "instance", None)
+
+        request_type = attrs.get(
+            "request_type",
+            getattr(instance, "request_type", None),
+        )
+
+        leave_start = attrs.get(
+            "leave_start",
+            getattr(instance, "leave_start", None),
+        )
+
+        leave_end = attrs.get(
+            "leave_end",
+            getattr(instance, "leave_end", None),
+        )
+
+        if request_type == "LEAVE":
+            if not leave_start:
+                raise serializers.ValidationError({
+                    "leave_start": (
+                        "Leave start is required for leave requests."
+                    )
+                })
+
+            if not leave_end:
+                raise serializers.ValidationError({
+                    "leave_end": (
+                        "Leave end is required for leave requests."
+                    )
+                })
+
+            if leave_end <= leave_start:
+                raise serializers.ValidationError({
+                    "leave_end": (
+                        "Leave end must be after leave start."
+                    )
+                })
+
+        return attrs
+
+############################################
+############################################
+class LeaveTaskActionSerializer(serializers.ModelSerializer):
+    task_title = serializers.CharField(
+        source="task.title",
+        read_only=True,
+    )
+
+    task_status = serializers.CharField(
+        source="task.status",
+        read_only=True,
+    )
+
+    current_assignee = serializers.SerializerMethodField()
+
+    new_assignee_name = serializers.SerializerMethodField()
+
+    action_display = serializers.CharField(
+        source="get_action_display",
+        read_only=True,
+    )
+    resolved_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LeaveTaskAction
+        fields = [
+            'resolved_by_name',
+            "id",
+            "request",
+            "task",
+            "task_title",
+            "task_status",
+            "current_assignee",
+            "impact",
+            "requires_action",
+            "action",
+            "action_display",
+            "new_assignee",
+            "new_assignee_name",
+            "new_due_date",
+            "is_resolved",
+            "created_at",
+            "updated_at",
+            "previous_task_status",
+            "previous_assignee",
+            "previous_due_date",
+
+"resolved_by",
+"resolved_at",
+        ]
+
+        read_only_fields = [
+            "id",
+            "request",
+            "task",
+            "task_title",
+            "task_status",
+            "current_assignee",
+            "impact",
+            "requires_action",
+            "is_resolved",
+            "created_at",
+            'resolved_by_name',
+            "updated_at",
+        ]
+
+    def get_resolved_by_name(self, obj):
+        if not obj.resolved_by:
+            return None
+
+        return (
+            obj.resolved_by.get_full_name()
+            or obj.resolved_by.username
+        )
+    def get_current_assignee(self, obj):
+        user = obj.task.assigned_to
+
+        if not user:
+            return None
+
+        return {
+            "id": user.id,
+            "name": user.get_full_name() or user.username,
+        }
+
+    def get_new_assignee_name(self, obj):
+        if not obj.new_assignee:
+            return None
+
+        return (
+            obj.new_assignee.get_full_name()
+            or obj.new_assignee.username
+        )
+
+
+
+
+class ResolveLeaveTaskActionSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(
+        choices=LeaveTaskAction.ACTION_CHOICES,
+    )
+
+    new_assignee = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
+    new_due_date = serializers.DateTimeField(
+        required=False,
+        allow_null=True,
+    )
+
+
+    def validate(self, attrs):
+        leave_action = self.context.get("leave_action")
+
+        action = attrs.get("action")
+        new_assignee = attrs.get("new_assignee")
+        new_due_date = attrs.get("new_due_date")
+
+        if action == "TRANSFER_TASK":
+            if not new_assignee:
+                raise serializers.ValidationError({
+                    "new_assignee": (
+                        "New assignee is required when "
+                        "transferring the task."
+                    )
+                })
+
+            if leave_action:
+                if new_assignee == leave_action.task.assigned_to:
+                    raise serializers.ValidationError({
+                        "new_assignee": (
+                            "The new assignee must be different "
+                            "from the current assignee."
+                        )
+                    })
+
+            attrs["new_due_date"] = None
+
+        elif action == "EXTEND_DUE_DATE":
+            if not new_due_date:
+                raise serializers.ValidationError({
+                    "new_due_date": (
+                        "New due date is required when "
+                        "extending the task."
+                    )
+                })
+
+
+
+            attrs["new_assignee"] = None
+
+        elif action in ["PAUSE_TASK", "NO_ACTION"]:
+            attrs["new_assignee"] = None
+            attrs["new_due_date"] = None
+
+        return attrs
+
+
+
 
 
 class BugReportSerializer(serializers.ModelSerializer):

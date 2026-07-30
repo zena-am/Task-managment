@@ -181,10 +181,10 @@ from datetime import timedelta
 
 SIMPLE_JWT = {
 
-    'ACCESS_TOKEN_LIFETIME': timedelta(days=1), 
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
 
 
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7), 
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
 
     'ROTATE_REFRESH_TOKENS': False,
     'BLACKLIST_AFTER_ROTATION': True,
@@ -301,3 +301,6 @@ CSRF_COOKIE_SAMESITE = "Lax"
 ACCOUNT_AUTHENTICATION_METHOD = "email"
 ACCOUNT_USERNAME_REQUIRED = False
 ACCOUNT_EMAIL_REQUIRED = True
+
+
+DEBUG = True

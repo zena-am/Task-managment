@@ -3,6 +3,7 @@ from django.db.models import Case, When, Value, BooleanField
 from django.shortcuts import get_object_or_404
 
 from users.models import ProjectRole, Task, WorkSpace, WorkSpaceMember
+from users.constants import create_activity_log
 from users.errors.exceptions import WorkspaceCannotLeaveAsCreator
 from users.services.invitationsService import InvitationService
 
@@ -32,6 +33,8 @@ class WorkspaceServices:
             defaults={"role": "ADMIN", "is_pinned": False},
         )
 
+        create_activity_log(user=user, action="WORKSPACE_CREATED", action_id=workspace.id, changes={"target_title": workspace.name, "reason": "Workspace created"})
+
         invitations_result = WorkspaceServices._send_workspace_invitations(
             sender=user,
             workspace=workspace,
@@ -43,6 +46,8 @@ class WorkspaceServices:
     @staticmethod
     def update_workspace(serializer, user, data):
         workspace = serializer.save()
+        create_activity_log(user=user, action="WORKSPACE_UPDATED", action_id=workspace.id, changes={"target_title": workspace.name, "reason": "Workspace updated"})
+
         invitations_result = WorkspaceServices._send_workspace_invitations(
             sender=user,
             workspace=workspace,
@@ -91,6 +96,7 @@ class WorkspaceServices:
 
             member.delete()
 
+        create_activity_log(user=user, action="WORKSPACE_LEFT", action_id=workspace.id, changes={"target_title": workspace.name, "reason": "User left workspace"})
 
         return {"workspace_id": workspace.id}
 
@@ -113,6 +119,8 @@ class WorkspaceServices:
                 user=old_owner,
                 defaults={"role": "MEMBER"},
             )
+
+        create_activity_log(user=old_owner, action="WORKSPACE_OWNERSHIP_TRANSFERRED", action_id=workspace.id, changes={"target_title": workspace.name, "new_owner_id": new_owner.id, "reason": "Workspace ownership transferred"})
 
         return {"new_owner_id": new_owner.id}
 

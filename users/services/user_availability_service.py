@@ -2,7 +2,6 @@ from users.errors.exceptions import BaseAppException
 
 
 class UserAvailabilityService:
-    """Central validation for operations that require a usable account."""
 
     @staticmethod
     def ensure_active(user, *, action="operation"):

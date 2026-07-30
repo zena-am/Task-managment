@@ -1,6 +1,7 @@
 from users.errors.exceptions import PermissionDeniedError, ProjectAlreadyExists
 from users.models import Project, ProjectRole, WorkSpaceMember
 from users.services.invitationsService import InvitationService
+from users.constants import create_activity_log
 
 
 class ProjectServiceLogic:
@@ -23,6 +24,8 @@ class ProjectServiceLogic:
             user=request.user,
             defaults={'role': 'ADMIN'},
         )
+
+        create_activity_log(user=request.user, action="PROJECT_CREATED", action_id=project.id, changes={"target_title": project.name, "workspace_id": workspace.id, "reason": "Project created"})
 
         receiver_emails = ProjectServiceLogic._get_list_value(request.data, "receiver_emails")
         member_emails = ProjectServiceLogic._get_list_value(request.data, "member_emails")

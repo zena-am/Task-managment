@@ -8,6 +8,7 @@ from drf_spectacular.utils import extend_schema, extend_schema_view
 from users.errors.exceptions import BaseAppException, PermissionDeniedError
 from users.errors.messages.success import success_response
 from users.services.WorkspaceService import WorkspaceServices
+from users.constants import create_activity_log
 from ..models import User, WorkSpace, WorkSpaceMember
 from ..serializers import WorkSpaceSerializer, WorkSpaceCreateSerializer
 from ..permissions import IsWorkspaceOwnerOrReadOnly
@@ -81,11 +82,14 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         workspace = self.get_object()
+        workspace_id = workspace.id
+        workspace_name = workspace.name
         self.perform_destroy(workspace)
+        create_activity_log(user=request.user, action="WORKSPACE_DELETED", action_id=workspace_id, changes={"target_title": workspace_name, "reason": "Workspace deleted"})
         return Response(success_response(
             message="Workspace deleted successfully",
             code="WORKSPACE_DELETED",
-            data={"workspace_id": workspace.id},
+            data={"workspace_id": workspace_id},
         ), status=status.HTTP_200_OK)
 
     @extend_schema(tags=['الفضاءات'], summary="نقل ملكية")

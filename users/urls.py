@@ -4,7 +4,9 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_nested.routers import NestedDefaultRouter
 
 from users.views import DashboardView, InvitationViewSet, NotificationViewSet, ProjectViewSet, searchUserViewSet, TaskView, TransferSystemBot
+from users.views.dep import AddTaskDependencyAPIView, RemoveTaskDependencyAPIView
 from users.views.invitations import invitationsMembers
+from users.views.leave_request import LeaveTaskActionViewSet
 from users.views.members_views import ProjectMemberViewSet, WorkSpaceMemberViewSet
 from users.views.profile import ProfileView
 from users.views.report import BugReportViewSet, RequestFormViewSet, TechnicalReportViewSet
@@ -25,7 +27,11 @@ router.register(r'technical-reports', TechnicalReportViewSet, basename='technica
 router.register(r'requests', RequestFormViewSet, basename='request')
 router.register(r'bug-reports', BugReportViewSet, basename='bug-report')
 router.register(r"workspace-search",WorkspaceSearchViewSet,basename="workspace-search",)
-
+router.register(
+    "leave-task-actions",
+    LeaveTaskActionViewSet,
+    basename="leave-task-actions",
+)
 router.register(r"project-search",ProjectSearchViewSet,basename="project-search",)
 project_router = NestedDefaultRouter(router, r'projects', lookup='project')
 project_router.register(r'members', ProjectMemberViewSet, basename='project-members')
@@ -53,6 +59,20 @@ urlpatterns = [
     path('workspaces/<int:workspace_id>/leave/', LeaveWorkspaceAPIView.as_view(), name='workspace-leave'),
     path('dashboard/', DashboardView.as_view(), name='dashboard-main'),
 
+
+
+    path(
+        "api/tasks/<int:task_id>/dependencies/",
+        AddTaskDependencyAPIView.as_view(),
+        name="task-dependency-add",
+    ),
+
+    path(
+        "api/tasks/<int:task_id>/dependencies/"
+        "<int:predecessor_id>/",
+        RemoveTaskDependencyAPIView.as_view(),
+        name="task-dependency-remove",
+    ),
     # Compatibility prefix if the frontend already uses /api/ inside this app include.
     path('api/', include(router.urls)),
     path('api/', include(project_router.urls)),

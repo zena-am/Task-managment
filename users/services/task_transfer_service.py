@@ -1,8 +1,9 @@
 from rest_framework.exceptions import ValidationError
 
-from users.services.user_availability_service import UserAvailabilityService
 from users.constants import create_activity_log
 from users.models import Notification, Project, ProjectRole, Task, User
+from users.services import UserAvailabilityService
+from users.services.task_service import validate_employee_task_availability
 
 
 class TaskTransferService:
@@ -44,26 +45,71 @@ class TaskTransferService:
         return count
 
     @staticmethod
-    def assign_task_to_user(task, new_assignee, performed_by,project):
-        UserAvailabilityService.ensure_active(new_assignee, action="task assignment")
+    def assign_task_to_user(
+        *,
+        task,
+        new_assignee,
+        performed_by,
+        project,
+    ):
+        UserAvailabilityService.ensure_active(
+            new_assignee,
+            action="task assignment",
+        )
+        is_project_member = ProjectRole.objects.filter(
+            project=project,
+            user=new_assignee,
+        ).exists()
+
+        if not is_project_member:
+            raise ValidationError({
+                "new_assignee": (
+                    "The selected user is not a member of this project."
+                )
+            })
+
+        validate_employee_task_availability(
+            employee=new_assignee,
+            due_date=task.due_date,
+            expected_duration=task.expected_duration,
+            actual_duration=task.actual_duration,
+        )
+        if task.status in ['DONE']:
+            raise ValidationError({
+                "task": "Completed or cancelled tasks cannot be reassigned."
+            })
+
         task.assigned_to = new_assignee
         task.status = "TODO"
-        task.save(update_fields=["assigned_to", "status", "updated_at"])
+        task.save(
+            update_fields=[
+                "assigned_to",
+                "status",
+                "updated_at",
+            ]
+        )
 
         create_activity_log(
             user=performed_by,
             action="GENERAL_UPDATE",
             action_id=task.id,
-            changes={"new_assignee": new_assignee.username}
-        )
-        Notification.objects.create(
-        recipient=new_assignee,
-        notification_type="SYSTEM_ALERT",
-        title="New Task Assigned",
-        message=f"You have been assigned to task '{task.title}' in project '{project.name}'.",
-        navigation_target=f"/tasks/{task.id}"
+            changes={
+                "new_assignee": new_assignee.username,
+            },
         )
 
+        Notification.objects.create(
+            recipient=new_assignee,
+            notification_type="SYSTEM_ALERT",
+            title="New Task Assigned",
+            message=(
+                f"You have been assigned to task '{task.title}' "
+                f"in project '{project.name}'."
+            ),
+            navigation_target=f"/tasks/{task.id}",
+        )
+
+        return task
 
 
 class ProjectService:
@@ -80,7 +126,6 @@ class ProjectService:
 
     @staticmethod
     def assign_new_manager(project, new_manager, performed_by):
-        UserAvailabilityService.ensure_active(new_manager, action="manager assignment")
 
         project_role = ProjectRole.objects.filter(
             project=project,
@@ -124,7 +169,6 @@ class ProjectService:
 class RoleService:
     @staticmethod
     def set_user_role(project, user, new_role, performed_by):
-        UserAvailabilityService.ensure_active(user, action="role assignment")
         project_role, created = ProjectRole.objects.get_or_create(project=project,user=user)
 
         if not project_role:
@@ -172,7 +216,6 @@ class RoleService:
 
     @staticmethod
     def transfer_tasks(project, new_assignee, performed_by):
-        UserAvailabilityService.ensure_active(new_assignee, action="task transfer")
         tasks = Task.objects.filter(project=project, assigned_to__isnull=True)
         count = tasks.count()
 

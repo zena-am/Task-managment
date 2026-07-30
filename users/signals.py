@@ -34,7 +34,7 @@ def create_task_notification(sender, instance, created, **kwargs):
                         }
         )
 
-        admins = ProjectRole.objects.filter(project=project, role='ADMIN').exclude(user=assignee)
+        admins = ProjectRole.objects.filter(project=project, role='ADMIN').exclude(user=assignee).exclude(user=instance.creator)
 
         for admin_record in admins:
             admin_user = admin_record.user

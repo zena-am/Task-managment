@@ -106,7 +106,11 @@ class TaskView(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        task = TaskService.create_task(request.user, serializer)
+        task = TaskService.create_task(
+        user=request.user,
+        serializer=serializer,
+    )
+
         response_serializer = TaskSerializer(task, context=self.get_serializer_context())
         return Response(success_response(
             message="Task created successfully",

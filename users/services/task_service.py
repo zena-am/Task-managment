@@ -1,3 +1,4 @@
+from datetime import timedelta
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 from django.db import transaction
@@ -8,7 +9,7 @@ from users.errors.exceptions import (
     TaskAlreadyAssigned,
     TechnicalReportMissingError,
 )
-from users.models import ActivityLog, Notification, ProjectRole, Task, TechnicalReportForm, User
+from users.models import ActivityLog, Notification, ProjectRole, RequestForm, Task, TaskDependency, TechnicalReportForm, User
 from users.services import UserAvailabilityService
 from users.services.invitationsService import InvitationService
 
@@ -47,11 +48,68 @@ def handle_side_effects(task, user, new_status):
             task.end_time = timezone.now()
             if task.start_time:
                 task.actual_duration = task.end_time - task.start_time
+
+
+
+
+
+
+def validate_employee_task_availability(
+        *,
+        employee,
+        due_date,
+        expected_duration,
+        actual_duration=None,
+    ):
+        if due_date is None or expected_duration is None:
+            return
+
+        actual_duration = actual_duration or timedelta(0)
+        remaining_duration = max(
+            expected_duration - actual_duration,
+            timedelta(0),
+        )
+
+        approved_leaves = RequestForm.objects.filter(
+            user=employee,
+            request_type="LEAVE",
+            status="APPROVED",
+            leave_end__gte=timezone.now(),
+        ).order_by("leave_start")
+
+        now = timezone.now()
+
+        for leave in approved_leaves:
+            if leave.leave_start <= now <= leave.leave_end:
+                raise ValidationError({
+                    "assigned_to": (
+                        "This employee is currently on approved leave "
+                        "and cannot receive new tasks."
+                    )
+                })
+
+            effective_deadline = min(
+                due_date,
+                leave.leave_start,
+            )
+
+            available_duration = effective_deadline - now
+
+            if due_date >= leave.leave_start and remaining_duration > available_duration:
+                raise ValidationError({
+                    "assigned_to": (
+                        "This employee cannot complete the task before "
+                        "the approved leave starts."
+                    )
+                })
+
+
 class TaskService:
 
     @staticmethod
     @transaction.atomic
-    def soft_delete_task(task, user):
+    def soft_delete_task(*,task, user):
+
         is_project_manager = ProjectRole.objects.filter(
             project=task.project,
             user=user,
@@ -65,9 +123,35 @@ class TaskService:
         if not is_project_manager and not is_workspace_owner:
             raise PermissionDeniedError()
 
+
+
         if task.is_deleted:
             return task
+        dependent_relations = (
+                task.dependent_tasks
+                .select_related("successor")
+                .filter(successor__is_deleted=False)
+            )
 
+        if dependent_relations.exists():
+                raise ValidationError({
+                    "detail": (
+                        "This task cannot be deleted because "
+                        "other active tasks depend on it."
+                    ),
+                    "code": "TASK_HAS_DEPENDENTS",
+                    "dependent_tasks": [
+                        {
+                            "dependency_id": relation.id,
+                            "task_id": relation.successor_id,
+                            "title": relation.successor.title,
+                            "status": relation.successor.status,
+                        }
+                        for relation in dependent_relations
+                    ],
+                })
+
+        # task.task_dependencies.all().delete()
         task.is_deleted = True
         task.deleted_at = timezone.now()
         task.deleted_by = user
@@ -97,6 +181,8 @@ class TaskService:
         )
 
         return task
+
+
     @staticmethod
     def claim_task(task, user):
         if task.assigned_to is not None:
@@ -136,50 +222,186 @@ class TaskService:
 
         return task
 
+    from django.db import transaction
+    from rest_framework.exceptions import ValidationError
 
 
     @staticmethod
-    def create_task(user, serializer):
-        assigned_user = serializer.validated_data.get('assigned_to')
-        project = serializer.validated_data.get('project')
-        initial_status = 'TODO' if assigned_user is not None else 'UNASSIGNED'
-        task = serializer.save(creator=user, status=initial_status)
+    def create_task(
+            *,
+            user,
+            serializer,
+        ):
+            validated_data = serializer.validated_data.copy()
 
-        if assigned_user:
-            UserAvailabilityService.ensure_active(
-                assigned_user,
-                action="task assignment",
+            dependency_tasks = validated_data.pop(
+                "dependency_ids",
+                [],
             )
-            is_project_member = ProjectRole.objects.filter(project=project, user=assigned_user).exists()
-            if not is_project_member:
-                InvitationService.send_project_invitation(
-                    sender=user,
-                    data={
-                        "project_id": task.project.id,
-                        "receiver_emails": [assigned_user.email],
-                        "role": "EMPLOYEE",
-                    },
+
+            assigned_user = validated_data.get("assigned_to")
+            project = validated_data.get("project")
+            due_date = validated_data.get("due_date")
+            expected_duration = validated_data.get("expected_duration")
+            actual_duration = validated_data.get("actual_duration")
+
+            if project is None:
+                raise ValidationError({
+                    "project": "Project is required."
+                })
+
+            if assigned_user is not None:
+                UserAvailabilityService.ensure_active(
+                    assigned_user,
+                    action="task assignment",
                 )
-
-            create_notification(
-                recipient=assigned_user,
-                notification_type="TASK_ASSIGNED",
-                title="مهمة جديدة",
-                message=f"قام {user.username} بإسناد مهمة جديدة لك: {task.title}",
-                navigation_target=f"/tasks/{task.id}",
+                validate_employee_task_availability(
+                    employee=assigned_user,
+                    due_date=due_date,
+                    expected_duration=expected_duration,
+                    actual_duration=actual_duration,
+                )
+            task = Task.objects.create(
+                creator=user,
+                status="TODO",
+                **validated_data,
             )
 
-        create_activity_log(
-            user=user,
-            action="GENERAL_UPDATE",
-            action_id=task.id,
-            subject_name=user.username,
-            target_title=task.title,
-            reason="Task created",
-            is_by_admin=True,
-        )
+            TaskService.create_dependencies(
+                task=task,
+                dependency_tasks=dependency_tasks,
+                created_by=user,
+            )
 
-        return task
+
+            if assigned_user is not None:
+                is_project_member = ProjectRole.objects.filter(
+                    project=project,
+                    user=assigned_user,
+                ).exists()
+
+                if not is_project_member:
+                    InvitationService.send_project_invitation(
+                        sender=user,
+                        data={
+                            "project_id": project.id,
+                            "receiver_emails": [
+                                assigned_user.email
+                            ],
+                            "role": "EMPLOYEE",
+                        },
+                    )
+
+            create_activity_log(
+                user=user,
+                action="GENERAL_UPDATE",
+                action_id=task.id,
+                subject_name=user.username,
+                target_title=task.title,
+                reason="Task created",
+                is_by_admin=True,
+            )
+
+            return task
+
+
+    @staticmethod
+    def creates_circular_dependency(*, predecessor, successor):
+        visited = set()
+        stack = [successor]
+
+        while stack:
+            current_task = stack.pop()
+
+            if current_task.id == predecessor.id:
+                return True
+
+            if current_task.id in visited:
+                continue
+
+            visited.add(current_task.id)
+
+            successor_ids = TaskDependency.objects.filter(
+                predecessor=current_task,
+                successor__is_deleted=False,
+            ).values_list(
+                "successor_id",
+                flat=True,
+            )
+
+            stack.extend(
+                Task.objects.filter(id__in=successor_ids)
+            )
+
+        return False
+    @staticmethod
+    def create_dependencies(
+        *,
+        task,
+        dependency_tasks,
+        created_by,
+    ):
+        if not dependency_tasks:
+            return []
+
+        dependencies = []
+        predecessor_ids = set()
+
+        for predecessor in dependency_tasks:
+            if predecessor.id in predecessor_ids:
+                raise ValidationError({
+                    "dependency_ids": (
+                        f"Task {predecessor.id} was selected "
+                        "more than once."
+                    )
+                })
+
+            predecessor_ids.add(predecessor.id)
+
+            if predecessor.id == task.id:
+                raise ValidationError({
+                    "dependency_ids": (
+                        "A task cannot depend on itself."
+                    )
+                })
+
+            if predecessor.project_id != task.project_id:
+                raise ValidationError({
+                    "dependency_ids": (
+                        "All dependency tasks must belong "
+                        "to the same project."
+                    )
+                })
+            if TaskService.creates_circular_dependency(
+                predecessor=predecessor,
+                successor=task,
+            ):
+                raise ValidationError({
+                    "detail": (
+                        "This dependency cannot be created because "
+                        "it would cause a circular dependency."
+                    ),
+                    "code": "CIRCULAR_DEPENDENCY",
+                    "dependency": {
+                        "predecessor_id": predecessor.id,
+                        "predecessor_title": predecessor.title,
+                        "successor_id": task.id,
+                        "successor_title": task.title,
+                    },
+                })
+
+            dependencies.append(
+                TaskDependency(
+                    predecessor=predecessor,
+                    successor=task,
+                    dependency_type="BLOCKS",
+                    created_by=created_by,
+                )
+            )
+
+        return TaskDependency.objects.bulk_create(
+            dependencies
+        )
 
     """
     @staticmethod
@@ -228,7 +450,20 @@ class TaskService:
     def update_status(task, user, status_value):
         allowed_choices = ["TODO", "INPROGRESS", "REVIEW", "DONE"]
         if status_value not in allowed_choices:
+                    raise InvalidStatusError()
+        TASK_TRANSITIONS = {
+            "TODO": ["INPROGRESS"],
+            "INPROGRESS": ["TODO", "REVIEW"],
+            "REVIEW": [],
+            "DONE": [],
+}
+        allowed_transitions = TASK_TRANSITIONS.get(
+            task.status,
+            [],
+)
+        if status_value not in allowed_transitions:
             raise InvalidStatusError()
+
 
         is_project_manager = ProjectRole.objects.filter(
             project=task.project,
@@ -239,12 +474,39 @@ class TaskService:
         is_assignee = task.assigned_to_id == user.id
         if not is_assignee and not is_project_manager:
             raise PermissionDeniedError()
+        if task.is_deleted or task.is_archived:
+                raise InvalidStatusError()
+
+
 
         if task.status == "DONE" and status_value != "DONE":
             raise InvalidStatusError()
+        if status_value == "INPROGRESS":
+                blocking_dependencies = (
+                    task.blocking_dependencies
+                    .select_related("predecessor")
+                )
 
-        if status_value == "INPROGRESS" and not task.start_time:
-            task.start_time = timezone.now()
+                if blocking_dependencies.exists():
+                    raise ValidationError({
+                        "detail": (
+                            "This task cannot be started because "
+                            "it has incomplete dependencies."
+                        ),
+                        "code": "TASK_BLOCKED",
+                        "blocked_by": [
+                            {
+                                "dependency_id": dependency.id,
+                                "task_id": dependency.predecessor_id,
+                                "title": dependency.predecessor.title,
+                                "status": dependency.predecessor.status,
+                            }
+                            for dependency in blocking_dependencies
+                        ],
+                    })
+
+                if not task.start_time:
+                    task.start_time = timezone.now()
 
         if status_value == "REVIEW":
             report = TechnicalReportForm.objects.filter(
@@ -269,6 +531,12 @@ class TaskService:
                     navigation_target=f"/task_details/{task.id}",
                 )
 
+
+        if status_value == "TODO":
+            task.start_time = None
+            task.end_time = None
+            task.actual_duration = None
+
         if status_value == "DONE":
             task.end_time = timezone.now()
             task.actual_duration = task.end_time - task.start_time if task.start_time else None
@@ -277,6 +545,19 @@ class TaskService:
         task.save(update_fields=["status", "start_time", "end_time", "actual_duration", "updated_at"])
 
         return task
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -406,3 +687,137 @@ class TaskService:
         )
 
         return task
+
+
+
+
+    @staticmethod
+    @transaction.atomic
+    def remove_dependency(*, task, predecessor, user):
+        is_project_manager = ProjectRole.objects.filter(
+            project=task.project,
+            user=user,
+            role__in=["ADMIN", "MANAGER"],
+        ).exists()
+
+        is_workspace_owner = (
+            task.project.workspace.creator_id == user.id
+        )
+
+        if not is_project_manager and not is_workspace_owner:
+            raise PermissionDeniedError()
+
+        dependency = TaskDependency.objects.filter(
+            predecessor=predecessor,
+            successor=task,
+        ).first()
+
+        if not dependency:
+            raise ValidationError({
+                "detail": "Dependency relation was not found.",
+                "code": "DEPENDENCY_NOT_FOUND",
+            })
+
+        dependency.delete()
+
+        create_activity_log(
+            user=user,
+            action="GENERAL_UPDATE",
+            action_id=task.id,
+            subject_name=user.username,
+            target_title=task.title,
+            reason=(
+                f"Dependency on task "
+                f"'{predecessor.title}' was removed."
+            ),
+            is_by_admin=True,
+        )
+
+        return task
+
+
+    @staticmethod
+    @transaction.atomic
+    def add_dependency(
+        *,
+        task,
+        predecessor,
+        user,
+        dependency_type="BLOCKS",
+    ):
+        is_project_manager = ProjectRole.objects.filter(
+            project=task.project,
+            user=user,
+            role__in=["ADMIN", "MANAGER"],
+        ).exists()
+
+        is_workspace_owner = (
+            task.project.workspace.creator_id == user.id
+        )
+
+        if not is_project_manager and not is_workspace_owner:
+            raise PermissionDeniedError()
+
+        if task.is_deleted or predecessor.is_deleted:
+            raise ValidationError({
+                "detail": "Deleted tasks cannot be used in dependencies.",
+                "code": "DELETED_TASK_DEPENDENCY",
+            })
+
+        if task.id == predecessor.id:
+            raise ValidationError({
+                "detail": "A task cannot depend on itself.",
+                "code": "SELF_DEPENDENCY",
+            })
+
+        if task.project_id != predecessor.project_id:
+            raise ValidationError({
+                "detail": (
+                    "Dependency tasks must belong to the same project."
+                ),
+                "code": "CROSS_PROJECT_DEPENDENCY",
+            })
+
+        if TaskDependency.objects.filter(
+            predecessor=predecessor,
+            successor=task,
+        ).exists():
+            raise ValidationError({
+                "detail": "This dependency already exists.",
+                "code": "DEPENDENCY_ALREADY_EXISTS",
+            })
+
+        if TaskService.creates_circular_dependency(
+            predecessor=predecessor,
+            successor=task,
+        ):
+            raise ValidationError({
+                "detail": (
+                    "This dependency cannot be created because "
+                    "it would cause a circular dependency."
+                ),
+                "code": "CIRCULAR_DEPENDENCY",
+            })
+
+        dependency = TaskDependency.objects.create(
+            predecessor=predecessor,
+            successor=task,
+            dependency_type=dependency_type,
+            created_by=user,
+        )
+
+        create_activity_log(
+            user=user,
+            action="GENERAL_UPDATE",
+            action_id=task.id,
+            subject_name=user.username,
+            target_title=task.title,
+            reason=(
+                f"Dependency on task "
+                f"'{predecessor.title}' was added."
+            ),
+            is_by_admin=True,
+        )
+
+        return dependency
+

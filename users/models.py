@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.db import models
 from django.shortcuts import render
 from django.contrib.auth.models import AbstractUser, UserManager
@@ -20,7 +22,7 @@ class User(AbstractUser):
         phone = models.CharField(max_length=20,blank=True, validators=[phone_regex])
         is_deleted = models.BooleanField(default=False, db_index=True)
         deleted_at = models.DateTimeField(null=True, blank=True)
-
+        is_available_for_tasks = models.BooleanField(default=True)
         objects = ActiveUserManager()
         all_objects = UserManager()
 
@@ -177,11 +179,13 @@ class ProjectRole(models.Model):
         ]
 
 class Task(TimeStampedModel):
+
         STATUS_CHOICES = [
                 ('TODO', 'To Do'),
                 ('INPROGRESS', 'In Progress'),
                 ('REVIEW', 'Review'),
                 ('DONE', 'Done'),
+                ("PAUSED", "Paused"),
         ]
 
         PRIORITY_CHOICES = [
@@ -202,6 +206,7 @@ class Task(TimeStampedModel):
         ("SUBMITTED", "Submitted"),
         ("REJECTED", "Rejected"),
         ("APPROVED", "Approved")]
+
         ASSIGNMENT_STATE = [
         ('UNASSIGNED_NEW', 'Not Assigned Yet'),
         ('UNASSIGNED_RETURNED', 'Returned / Removed'),
@@ -215,28 +220,24 @@ class Task(TimeStampedModel):
         parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.CASCADE, related_name="subtasks")
         title = models.CharField(max_length=200)
         description = models.TextField()
-        expected_duration = models.DurationField()
-        actual_duration = models.DurationField(null=True, blank=True)
-        start_time = models.DateTimeField(null=True, blank=True)
-        end_time = models.DateTimeField(null=True, blank=True)
+        expected_duration = models.DurationField(verbose_name="Expected Duration")
+        actual_duration = models.DurationField( null=True,blank=True,default=timedelta(0),verbose_name="Actual Worked Duration")
+
         link = models.URLField(max_length=500, null=True, blank=True)
         due_date = models.DateTimeField()
+
+        start_time = models.DateTimeField(null=True, blank=True)
+        end_time = models.DateTimeField(null=True, blank=True)
         assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_tasks')
         report_status = models.CharField(max_length=20,choices=REPORT_CHOICES,default="NONE")
         assignment_state = models.CharField(max_length=20,choices=ASSIGNMENT_STATE,default='UNASSIGNED_NEW')
-        is_deleted = models.BooleanField(
-        default=False,
-        db_index=True,
-        )
+
+        is_deleted = models.BooleanField(default=False,db_index=True,)
         is_archived = models.BooleanField(default=False, db_index=True)
         archived_at = models.DateTimeField(null=True, blank=True)
         archived_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="archived_tasks")
 
-        deleted_at = models.DateTimeField(
-                null=True,
-                blank=True,
-        )
-
+        deleted_at = models.DateTimeField(null=True,blank=True,)
         deleted_by = models.ForeignKey(
                 settings.AUTH_USER_MODEL,
                 on_delete=models.SET_NULL,
@@ -244,6 +245,7 @@ class Task(TimeStampedModel):
                 blank=True,
                 related_name="soft_deleted_tasks",
         )
+
         def save(self, *args, **kwargs):
                 if self.pk is None:
                         if self.assigned_to is None:
@@ -257,11 +259,35 @@ class Task(TimeStampedModel):
                                 self.assignment_state = 'ASSIGNED'
 
                 super().save(*args, **kwargs)
+
         def is_unassigned(self):
                 return self.assignment_state in [
                         'UNASSIGNED_NEW',
                         'UNASSIGNED_RETURNED'
                 ]
+        @property
+        def blocking_dependencies(self):
+                return self.task_dependencies.filter(
+                        dependency_type="BLOCKS",
+                ).exclude(
+                        predecessor__status="DONE",
+                )
+
+
+        @property
+        def is_blocked(self):
+                return self.blocking_dependencies.exists()
+
+
+        @property
+        def can_start(self):
+                return (
+                        self.status == "TODO"
+                        and self.assigned_to_id is not None
+                        and not self.is_deleted
+                        and not self.is_archived
+                        and not self.is_blocked
+                )
         class Meta:
                 indexes = [
                 models.Index(fields=["status"]),
@@ -281,6 +307,72 @@ class TaskFile(TimeStampedModel):
         task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='files')
         user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='uploaded_task_files')
         file = models.FileField(upload_to=TaskFilePath)
+
+
+
+class TaskDependency(TimeStampedModel):
+        DEPENDENCY_TYPES = [
+                ("BLOCKS", "Blocks"),
+                ("RELATED", "Related"),
+        ]
+
+        predecessor = models.ForeignKey(
+                Task,
+                on_delete=models.CASCADE,
+                related_name="dependent_tasks",
+        )
+
+        successor = models.ForeignKey(
+                Task,
+                on_delete=models.CASCADE,
+                related_name="task_dependencies",
+        )
+
+        dependency_type = models.CharField(
+                max_length=20,
+                choices=DEPENDENCY_TYPES,
+                default="BLOCKS",
+        )
+
+        created_by = models.ForeignKey(
+                settings.AUTH_USER_MODEL,
+                on_delete=models.SET_NULL,
+                null=True,
+                related_name="created_task_dependencies",
+        )
+
+        class Meta:
+                constraints = [
+                models.UniqueConstraint(
+                        fields=[
+                        "predecessor",
+                        "successor",
+                        "dependency_type",
+                        ],
+                        name="unique_task_dependency",
+                ),
+                models.CheckConstraint(
+                        condition=~models.Q(
+                        predecessor=models.F("successor")
+                        ),
+                        name="prevent_task_self_dependency",
+                ),
+                ]
+
+                indexes = [
+                models.Index(fields=["predecessor"]),
+                models.Index(fields=["successor"]),
+                models.Index(fields=["dependency_type"]),
+                ]
+
+
+
+
+
+
+
+
+
 
 class TechnicalReportForm(TimeStampedModel):
 
@@ -334,12 +426,16 @@ class RequestForm(TimeStampedModel):
         STATUS_CHOICES = [
         ('PENDING', 'Pending'),
         ('APPROVED', 'Approved'),
-        ('REJECTED', 'Rejected'), ]
+        ('REJECTED', 'Rejected'),
+        ("ACTION_REQUIRED", "Action Required"),
+        ("CANCELLED", "Cancelled"),
+        ("COMPLETED", "Completed"),
+        ('ON_HOLD', 'On Hold') ]
 
         user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='requests')
         request_type = models.CharField(max_length=20, choices=REQUEST_TYPES, default='OTHER')
         priority = models.CharField(max_length=10, choices=PRIORITY_LEVELS, default='NORMAL')
-        status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='PENDING')
+        status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
         manager_feedback = models.TextField(blank=True, null=True)
         reason = models.TextField()
         project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='my_requests')
@@ -347,6 +443,10 @@ class RequestForm(TimeStampedModel):
         file = models.FileField(upload_to=RequestPath, blank=True, null=True)
         image=models.ImageField(upload_to=RequestImage,null=True,blank=True)
         time=models.DateTimeField()
+        requested_at = models.DateTimeField(null=True,blank=True,)
+        leave_start = models.DateTimeField(  null=True,blank=True,)
+        leave_end = models.DateTimeField(  null=True,blank=True,)
+
         class Meta:
                 indexes = [
                 models.Index(fields=['user']),
@@ -355,6 +455,72 @@ class RequestForm(TimeStampedModel):
                 ordering = ['-created_at']
 
 
+
+class LeaveTaskAction(TimeStampedModel):
+        ACTION_CHOICES = [
+                ("NO_ACTION", "No Action"),
+                ("TRANSFER_TASK", "Transfer Task"),
+                ("EXTEND_DUE_DATE", "Extend Due Date"),
+                ("PAUSE_TASK", "Pause Task"),
+                ("REVIEW_REPORT", "Review Report")
+        ]
+
+        IMPACT_CHOICES = [
+                ("COMPLETED", "Completed"),
+                ("NO_DUE_DATE", "No Due Date"),
+                (
+                        "CAN_FINISH_BEFORE_LEAVE",
+                        "Can Finish Before Leave",
+                ),
+                (
+                        "NOT_ENOUGH_TIME_BEFORE_LEAVE",
+                        "Not Enough Time Before Leave",
+                ),
+                (
+                        "DUE_DURING_LEAVE",
+                        "Due During Leave",
+                ),
+                (
+                        "CAN_FINISH_AFTER_RETURN",
+                        "Can Finish After Return",
+                ),
+                (
+                        "NOT_ENOUGH_TIME_AFTER_RETURN",
+                        "Not Enough Time After Return",
+                ),
+                ]
+
+        previous_assignee = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="previous_leave_task_assignments",
+        )
+
+        previous_due_date = models.DateTimeField(
+        null=True,
+        blank=True,
+)
+        request = models.ForeignKey(RequestForm, on_delete=models.CASCADE, related_name="leave_task_actions")
+        task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="leave_request_actions")
+        action = models.CharField(max_length=30, choices=ACTION_CHOICES, blank=True, null=True)
+        new_assignee = models.ForeignKey(User, on_delete=models.SET_NULL, blank=True, null=True, related_name="leave_transferred_tasks")
+        new_due_date = models.DateTimeField(blank=True, null=True)
+        previous_task_status = models.CharField(max_length=30, blank=True, null=True)
+        impact = models.CharField(max_length=40, choices=IMPACT_CHOICES)
+        requires_action = models.BooleanField(default=False)
+        is_resolved = models.BooleanField(default=False)
+        resolved_by = models.ForeignKey(User, on_delete=models.SET_NULL, blank=True, null=True, related_name="resolved_leave_task_actions")
+        resolved_at = models.DateTimeField(blank=True, null=True)
+
+        class Meta:
+                constraints = [
+                models.UniqueConstraint(fields=["request", "task"], name="unique_task_per_leave_request"),
+                ]
+
+        def __str__(self):
+                return f"Leave request {self.request_id} - Task {self.task_id}"
 
 
 
@@ -450,9 +616,12 @@ class Notification(TimeStampedModel):
         ('INVITATION_RECEIVED', 'Invitation Received'),
         ('INVITATION_ACCEPTED', 'Invitation Accepted'),
         ('INVITATION_REJECTED', 'Invitation Rejected'),
+        ('BUG_REPORTED', 'Bug Reported'),
+        ('BUG_CLOSED', 'Bug Closed'),
+        ('BUG_CONVERTED_TO_TASK', 'Bug Converted To Task'),
         ]
         recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
-        notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES, default='SYSTEM_ALERT')
+        notification_type = models.CharField(max_length=30, choices=NOTIFICATION_TYPES, default='SYSTEM_ALERT')
         title = models.CharField(max_length=255)
         message = models.TextField()
         is_read = models.BooleanField(default=False)
@@ -464,7 +633,19 @@ class Notification(TimeStampedModel):
 class ActivityLog(TimeStampedModel):
         ActionTypes=[
         ('ACCOUNT_CREATED','account created'),
+        ('WORKSPACE_CREATED', 'Workspace Created'),
+        ('WORKSPACE_UPDATED', 'Workspace Updated'),
+        ('WORKSPACE_DELETED', 'Workspace Deleted'),
+        ('WORKSPACE_LEFT', 'Workspace Left'),
+        ('WORKSPACE_OWNERSHIP_TRANSFERRED', 'Workspace Ownership Transferred'),
+        ('PROJECT_CREATED', 'Project Created'),
+        ('PROJECT_UPDATED', 'Project Updated'),
+        ('PROJECT_DELETED', 'Project Deleted'),
+        ('PROJECT_LEFT', 'Project Left'),
+        ('TASK_ASSIGNED', 'Task Assigned'),
         ('TASK_UNASSIGNED', 'Task Unassigned'),
+        ('TASK_DELETED', 'Task Deleted'),
+        ('MEMBER_ADDED', 'User Added'),
         ('MEMBER_REMOVED', 'User Removed from Workspace'),
         ('MEMBER_LEFT', 'User left from Workspace'),
         ('ACCOUNT_PURGED', 'Account Deleted'),
@@ -483,7 +664,11 @@ class ActivityLog(TimeStampedModel):
         ('REPORT_DRAFT_UPDATED', 'Report Draft Updated'),
         ('REPORT_DELETED', 'Report Deleted'),
         ('REPORT_SUBMITTED', 'Report Submitted'),
-        ('ROLE_UPDATED','ROLE_UPDATED'),
+        ('BUG_REPORTED', 'Bug Reported'),
+        ('BUG_UPDATED', 'Bug Updated'),
+        ('BUG_DELETED', 'Bug Deleted'),
+        ('BUG_CONVERTED_TO_TASK', 'Bug Converted To Task'),
+        ('ROLE_UPDATED','Role Updated'),
         ('BULK_TASK_UPDATED', 'Bulk Task Updated'),
         ('WORKSPACE_ARCHIVED', 'Workspace Archived'),
         ('WORKSPACE_RESTORED', 'Workspace Restored'),

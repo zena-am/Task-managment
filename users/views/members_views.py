@@ -14,6 +14,7 @@ from users.errors.exceptions import (
 )
 from users.errors.messages.success import success_response
 from users.models import WorkSpace, WorkSpaceMember, ProjectRole, Task
+from users.constants import create_activity_log
 from ..permissions import IsTeamManagerForProject, IsWorkspaceOwner
 from ..serializers import ProjectMemberDetailSerializer, WorkSpaceMemberDetailSerializer
 
@@ -91,8 +92,11 @@ class ProjectMemberViewSet(viewsets.ModelViewSet):
             if existing_admin.exists():
                 raise OnlyOneWorkspaceAdminError()
 
+        old_role = member.role
         member.role = new_role
         member.save(update_fields=['role'])
+        if old_role != new_role:
+            create_activity_log(user=request.user, action="ROLE_UPDATED", action_id=member.user_id, changes={"project_id": int(project_id), "old_role": old_role, "new_role": new_role, "reason": "Project member role updated"})
 
         return Response(success_response(
             message="Member role updated successfully",
@@ -136,7 +140,10 @@ class ProjectMemberViewSet(viewsets.ModelViewSet):
                 assigned_to=None,
                 status="UNASSIGNED",
             )
+            removed_user_id = member.user_id
             member.delete()
+
+        create_activity_log(user=request.user, action="MEMBER_REMOVED", action_id=removed_user_id, changes={"project_id": int(project_id), "reason": "Project member removed"})
 
         return Response(success_response(
             message="Project member removed successfully",
@@ -221,8 +228,11 @@ class WorkSpaceMemberViewSet(viewsets.ModelViewSet):
             if existing_admin.exists():
                 raise OnlyOneWorkspaceAdminError()
 
+        old_role = member.role
         member.role = new_role
         member.save(update_fields=['role'])
+        if old_role != new_role:
+            create_activity_log(user=request.user, action="ROLE_UPDATED", action_id=member.user_id, changes={"workspace_id": int(workspace_id), "old_role": old_role, "new_role": new_role, "reason": "Workspace member role updated"})
 
         return Response(success_response(
             message="Workspace member role updated successfully",
@@ -252,6 +262,8 @@ class WorkSpaceMemberViewSet(viewsets.ModelViewSet):
                 status="UNASSIGNED",
             )
             WorkSpaceMember.objects.filter(workspace_id=workspace_id, user_id=user_id).delete()
+
+        create_activity_log(user=request.user, action="MEMBER_REMOVED", action_id=int(user_id), changes={"workspace_id": int(workspace_id), "reason": "Workspace member removed"})
 
         return Response(success_response(
             message="Workspace member removed successfully",

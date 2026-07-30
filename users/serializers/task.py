@@ -2,7 +2,7 @@ from datetime import timedelta
 from django.utils import timezone
 from rest_framework import serializers
 from users.serializers.user import UserSerializer
-from ..models import Project, ProjectRole, Task,TaskImage,TaskFile, TechnicalReportForm, User
+from ..models import Project, ProjectRole, Task, TaskDependency,TaskImage,TaskFile, TechnicalReportForm, User
 
 
 class TaskImageSerializer(serializers.ModelSerializer):
@@ -28,7 +28,7 @@ class TaskImageSerializer(serializers.ModelSerializer):
 class TaskFileSerializer(serializers.ModelSerializer):
     file_url = serializers.SerializerMethodField()
     file_name = serializers.SerializerMethodField()
- 
+
     class Meta:
         model = TaskFile
         fields = ['id', 'file', 'file_url', 'file_name', 'created_at']
@@ -67,9 +67,24 @@ class TaskSerializer(serializers.ModelSerializer):
     state_label = serializers.SerializerMethodField()
     role_in_project = serializers.SerializerMethodField()
     deleted_by_name = serializers.SerializerMethodField()
+    is_blocked = serializers.BooleanField(
+    read_only=True,
+)
+
+    can_start = serializers.BooleanField(
+        read_only=True,
+    )
+
+    blocked_by = serializers.SerializerMethodField()
+    dependencies = serializers.SerializerMethodField()
+    dependents = serializers.SerializerMethodField()    
+
     class Meta:
         model = Task
         fields = [
+            'blocked_by',
+            'is_blocked' ,
+            'can_start',
             "is_deleted",
             "deleted_at",
             "deleted_by",
@@ -77,10 +92,60 @@ class TaskSerializer(serializers.ModelSerializer):
             'id', 'title', 'project', 'status', 'status_display', 'priority', 'priority_display',
             'expected_duration', 'time_expected_hours', 'actual_duration', 'actual_duration_hours',
             'start_time', 'end_time', 'link','due_date','permissions','state_label','task_actions','role_in_project',
-            'assigned_to', 'assigned_to_detail','supervisors_detail', 'supervisors',  'is_overdue','images','files'
+            'assigned_to', 'assigned_to_detail','supervisors_detail', 'supervisors',  'is_overdue','images','files',
+            'dependencies',
+    'dependents',
         ]
 
         read_only_fields = ['start_time', 'end_time']
+    def get_dependencies(self, obj):
+        relations = obj.task_dependencies.select_related(
+            "predecessor",
+        )
+
+        return [
+            {
+                "dependency_id": relation.id,
+                "task_id": relation.predecessor_id,
+                "title": relation.predecessor.title,
+                "status": relation.predecessor.status,
+                "dependency_type": relation.dependency_type,
+                "is_completed": (
+                    relation.predecessor.status == "DONE"
+                ),
+            }
+            for relation in relations
+        ]
+    def get_dependents(self, obj):
+        relations = obj.dependent_tasks.select_related(
+            "successor",
+        )
+
+        return [
+            {
+                "dependency_id": relation.id,
+                "task_id": relation.successor_id,
+                "title": relation.successor.title,
+                "status": relation.successor.status,
+                "dependency_type": relation.dependency_type,
+            }
+            for relation in relations
+        ]
+    def get_blocked_by(self, obj):
+        dependencies = obj.blocking_dependencies.select_related(
+            "predecessor",
+        )
+
+
+        return [
+            {
+                "dependency_id": dependency.id,
+                "task_id": dependency.predecessor_id,
+                "title": dependency.predecessor.title,
+                "status": dependency.predecessor.status,
+            }
+            for dependency in dependencies
+        ]
     def get_deleted_by_name(self, obj):
         if not obj.deleted_by:
             return None
@@ -187,19 +252,14 @@ class TaskSerializer(serializers.ModelSerializer):
                 or is_viewer
             ),
 
-            # تعديل المهمة للمدير أو الأدمن فقط
             "can_update": is_manager or is_owner,
 
-            # حذف المهمة للمدير أو الأدمن أو مالك مساحة العمل
             "can_delete": is_manager or is_owner,
 
-            # الإسناد وإعادة الإسناد للمدير أو الأدمن فقط
             "can_assign": is_manager or is_owner,
 
-            # إنشاء مهمة للمدير أو الأدمن أو مالك مساحة العمل
             "can_create_task": is_manager or is_owner,
 
-            # الموظف المسند إليه فقط يرفع التقرير
             "can_submit_report": (
                 is_employee
                 and is_assigned
@@ -215,14 +275,28 @@ class TaskSerializer(serializers.ModelSerializer):
         }
 
     def get_state_label(self, obj):
-        if obj.status == "TODO":
+        if obj.is_deleted:
+            return "DELETED"
+
+        if obj.status == "DONE":
+            return "DONE"
+
+        if obj.is_blocked:
+            return "BLOCKED"
+
+        if obj.status == "PAUSED":
+            return "PAUSED"
+
+        if obj.status == "REVIEW":
+            return "IN_REVIEW"
+
+        if obj.status == "INPROGRESS":
+            return "IN_PROGRESS"
+
+        if obj.status == "TODO" and obj.can_start:
             return "READY"
-        elif obj.status == "INPROGRESS":
-            return "ACTIVE"
-        elif obj.status == "REVIEW":
-            return "WAITING_REVIEW"
-        elif obj.status == "DONE":
-            return "COMPLETED"
+
+        return obj.status
     def get_supervisors_detail(self, obj):
         managers = User.objects.filter(
             projectrole__project=obj.project,
@@ -242,18 +316,15 @@ class TaskSerializer(serializers.ModelSerializer):
 
 
     def get_is_overdue(self, obj):
-        if obj.status == 'DONE':
+        if obj.status == "DONE":
             return False
 
-        if obj.start_time and obj.expected_duration:
-            deadline = obj.start_time +obj.expected_duration
-            return timezone.now() > deadline
+        if not obj.due_date:
+            return False
 
-        if not obj.start_time and obj.created_at and obj.expected_duration:
-            deadline_from_creation = obj.created_at + obj.expected_duration
-            return timezone.now() > deadline_from_creation
+        return timezone.now() > obj.due_date
 
-        return False
+
     def get_supervisors(self, obj):
             """
             return User.objects.filter(
@@ -274,48 +345,144 @@ class TaskSerializer(serializers.ModelSerializer):
 
         return role == "EMPLOYEE" and obj.assigned_to_id == user.id
 
-    ###########################################################################################################
+##################################################
+##################################################
+##################################################
+class TaskDependencySerializer(serializers.ModelSerializer):
+    predecessor_title = serializers.CharField(
+        source="predecessor.title",
+        read_only=True,
+    )
+    successor_title = serializers.CharField(
+        source="successor.title",
+        read_only=True,
+    )
 
+    class Meta:
+        model = TaskDependency
+        fields = [
+            "id",
+            "predecessor",
+            "predecessor_title",
+            "successor",
+            "successor_title",
+            "dependency_type",
+            "created_by",
+            "created_at",
+        ]
 
+        read_only_fields = [
+            "id",
+            "created_by",
+            "created_at",
+            "predecessor_title",
+            "successor_title",
+        ]
 
+class AddTaskDependencySerializer(serializers.Serializer):
+    predecessor_id = serializers.PrimaryKeyRelatedField(
+        source="predecessor",
+        queryset=Task.objects.filter(is_deleted=False),
+    )
+
+    dependency_type = serializers.ChoiceField(
+        choices=TaskDependency.DEPENDENCY_TYPES,
+        default="BLOCKS",
+        required=False,
+    )
+
+##################################################
+##################################################
+##################################################
+##################################################
 class TaskCreateUpdateSerializer(serializers.ModelSerializer):
     image_files = serializers.ListField(child=serializers.ImageField(), write_only=True, required=False)
     document_files = serializers.ListField(child=serializers.FileField(), write_only=True, required=False)
     due_date = serializers.DateTimeField(
         input_formats=["%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S%z", "iso-8601"]
     )
+    dependency_ids = serializers.PrimaryKeyRelatedField(
+        queryset=Task.objects.filter(
+            is_deleted=False,
+            is_archived=False,
+        ),
+        many=True,
+        required=False,
+        write_only=True,
+    )
 
     class Meta:
         model = Task
         fields = [
-            'id', 'project', 'title', 'description', 'priority', 'status',
+            'id', 'project', 'title', 'description', 'priority', 'status','dependency_ids',
             'expected_duration', 'link', 'assigned_to', 'image_files',
             'document_files', 'due_date'
         ]
         read_only_fields = ['id']
 
-    def validate(self, data):
-        expected_duration = data.get('expected_duration')
-        if expected_duration and expected_duration.total_seconds() <= 0:
-            raise serializers.ValidationError({"expected_duration": "it must be greater than 0"})
 
-        project = data.get('project') or getattr(self.instance, 'project', None)
-        assignee = data.get('assigned_to')
-        if project and assignee:
-            is_member = ProjectRole.objects.filter(project=project, user=assignee).exists()
-            if not is_member:
-                raise serializers.ValidationError(
-                    {"assigned_to": "لا يمكن إسناد المهمة لهذا المستخدم لأنه ليس عضواً في هذا المشروع."}
+    def validate(self, attrs):
+        project = attrs.get("project")
+        parent = attrs.get("parent")
+        assigned_to = attrs.get("assigned_to")
+        dependencies = attrs.get("dependency_ids", [])
+
+
+        expected_duration = attrs.get('expected_duration')
+        if expected_duration and expected_duration.total_seconds() <= 0:
+                    raise serializers.ValidationError({"expected_duration": "it must be greater than 0"})
+
+        if parent and parent.project_id != project.id:
+            raise serializers.ValidationError({
+                "parent": "The parent task must belong to the same project."
+            })
+
+        for dependency_task in dependencies:
+            if dependency_task.project_id != project.id:
+                raise serializers.ValidationError({
+                    "dependency_ids": (
+                        f"Task {dependency_task.id} does not belong "
+                        "to the selected project."
+                    )
+                })
+
+        if parent and parent in dependencies:
+            raise serializers.ValidationError({
+                "dependency_ids": (
+                    "The parent task should not automatically be used "
+                    "as a blocking dependency."
                 )
-        return data
+            })
+
+        if assigned_to:
+
+            is_member = project.members.filter(
+                pk=assigned_to.pk
+            ).exists()
+
+            if not is_member:
+                raise serializers.ValidationError({
+                    "assigned_to": (
+                        "The selected employee is not a project member."
+                    )
+                })
+
+        return attrs
 
     def create(self, validated_data):
         image_files = validated_data.pop('image_files', [])
         document_files = validated_data.pop('document_files', [])
+        dependencies = validated_data.pop("dependency_ids", [])
         request = self.context.get('request')
 
         task = Task.objects.create(**validated_data)
-
+        for dependency_task in dependencies:
+            TaskDependency.objects.create(
+                predecessor=dependency_task,
+                successor=task,
+                dependency_type="BLOCKS",
+                created_by=request.user,
+            )
         for image in image_files:
             TaskImage.objects.create(task=task, user=request.user, image=image)
 

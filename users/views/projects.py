@@ -8,6 +8,7 @@ from users.errors.exceptions import BaseAppException
 from users.errors.messages.success import success_response
 from users.models import Project, ProjectRole, Task
 from users.services.project_logic import ProjectServiceLogic as ProjectService
+from users.constants import create_activity_log
 from ..permissions import IsProjectManagerOrReadOnly
 from ..serializers import ProjectSerializer, ProjectCreateSerializer
 
@@ -88,6 +89,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         project = serializer.save()
+        create_activity_log(user=request.user, action="PROJECT_UPDATED", action_id=project.id, changes={"target_title": project.name, "reason": "Project updated"})
         response_serializer = ProjectSerializer(project, context=self.get_serializer_context())
         return Response(success_response(
             message="Project updated successfully",
@@ -102,7 +104,9 @@ class ProjectViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         project_id = instance.id
+        project_name = instance.name
         self.perform_destroy(instance)
+        create_activity_log(user=request.user, action="PROJECT_DELETED", action_id=project_id, changes={"target_title": project_name, "reason": "Project deleted"})
         return Response(success_response(
             message="Project deleted successfully",
             code="PROJECT_DELETED",
@@ -146,6 +150,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 status="UNASSIGNED",
             )
             member_role.delete()
+
+        create_activity_log(user=user, action="PROJECT_LEFT", action_id=project.id, changes={"target_title": project.name, "reason": "User left project"})
 
         return Response(success_response(
             message="Left project successfully",
