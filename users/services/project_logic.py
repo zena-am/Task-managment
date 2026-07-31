@@ -12,6 +12,17 @@ class ProjectServiceLogic:
 
         if Project.objects.filter(workspace=workspace, name=name).exists():
             raise ProjectAlreadyExists()
+        is_workspace_admin = (
+            workspace.creator_id == request.user.id
+            or WorkSpaceMember.objects.filter(
+                workspace=workspace,
+                user=request.user,
+                role="ADMIN",
+            ).exists()
+        )
+
+        if not is_workspace_admin:
+            raise PermissionDeniedError()
 
         project = serializer.save()
         ProjectRole.objects.get_or_create(
@@ -19,11 +30,7 @@ class ProjectServiceLogic:
             user=request.user,
             defaults={'role': 'ADMIN'},
         )
-        WorkSpaceMember.objects.get_or_create(
-            workspace=workspace,
-            user=request.user,
-            defaults={'role': 'ADMIN'},
-        )
+
 
         create_activity_log(user=request.user, action="PROJECT_CREATED", action_id=project.id, changes={"target_title": project.name, "workspace_id": workspace.id, "reason": "Project created"})
 

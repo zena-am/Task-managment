@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.db.models import Q
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
@@ -6,7 +7,7 @@ from rest_framework.response import Response
 
 from users.errors.exceptions import BaseAppException
 from users.errors.messages.success import success_response
-from users.models import Project, ProjectRole, Task
+from users.models import Project, ProjectRole, Task, WorkSpaceMember
 from users.services.project_logic import ProjectServiceLogic as ProjectService
 from users.constants import create_activity_log
 from ..permissions import IsProjectManagerOrReadOnly
@@ -29,14 +30,39 @@ class ProjectViewSet(viewsets.ModelViewSet):
             return ProjectCreateSerializer
         return ProjectSerializer
 
-    def get_queryset(self):
-        queryset = Project.objects.filter(
-            workspace__members=self.request.user,
-        ).select_related('workspace').distinct()
 
-        workspace_id = self.request.query_params.get('workspace')
+    def get_queryset(self):
+        user = self.request.user
+
+        workspace_admin_ids = WorkSpaceMember.objects.filter(
+            user=user,
+            role="ADMIN",
+        ).values_list(
+            "workspace_id",
+            flat=True,
+        )
+
+        member_project_ids = ProjectRole.objects.filter(
+            user=user,
+        ).values_list(
+            "project_id",
+            flat=True,
+        )
+
+        queryset = Project.objects.filter(
+            Q(workspace__creator=user)
+            | Q(workspace_id__in=workspace_admin_ids)
+            | Q(id__in=member_project_ids)
+        ).select_related(
+            "workspace",
+        ).distinct()
+
+        workspace_id = self.request.query_params.get("workspace")
+
         if workspace_id:
-            queryset = queryset.filter(workspace_id=workspace_id)
+            queryset = queryset.filter(
+                workspace_id=workspace_id,
+            )
 
         return queryset
 
