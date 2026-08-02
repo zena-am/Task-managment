@@ -64,6 +64,9 @@ class ProjectMemberViewSet(viewsets.ModelViewSet):
     def partial_update(self, request, *args, **kwargs):
         project_id = kwargs.get('project_pk')
         member_id = kwargs.get('pk')
+        workspace = member.workspace
+
+
 
         if not ProjectRole.objects.filter(
             project_id=project_id,
@@ -115,7 +118,7 @@ class ProjectMemberViewSet(viewsets.ModelViewSet):
         if not ProjectRole.objects.filter(
             project_id=project_id,
             user=request.user,
-            role__in=['MANAGER', 'ADMIN'],
+            role="ADMIN",
         ).exists():
             raise PermissionDeniedError()
 
@@ -138,7 +141,8 @@ class ProjectMemberViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             Task.objects.filter(project_id=project_id, assigned_to_id=member_id).update(
                 assigned_to=None,
-                status="UNASSIGNED",
+                assignment_state="UNASSIGNED_RETURNED",
+                status="TODO",
             )
             removed_user_id = member.user_id
             member.delete()
@@ -227,6 +231,24 @@ class WorkSpaceMemberViewSet(viewsets.ModelViewSet):
             existing_admin = WorkSpaceMember.objects.filter(workspace_id=workspace_id, role="ADMIN").exclude(user_id=user_id)
             if existing_admin.exists():
                 raise OnlyOneWorkspaceAdminError()
+        if member.workspace.creator_id == member.user_id:
+            raise BaseAppException(
+                detail=(
+                    "The workspace owner's role cannot be changed. "
+                    "Transfer ownership first."
+                ),
+                code="WORKSPACE_OWNER_ROLE_LOCKED",
+                status_code=400,
+            )
+        if new_role != "MEMBER":
+                raise BaseAppException(
+                    detail=(
+                        "Workspace members cannot be promoted to ADMIN. "
+                        "Transfer workspace ownership instead."
+                    ),
+                    code="WORKSPACE_ADMIN_REQUIRES_OWNERSHIP_TRANSFER",
+                    status_code=400,
+                )
 
         old_role = member.role
         member.role = new_role
@@ -250,7 +272,7 @@ class WorkSpaceMemberViewSet(viewsets.ModelViewSet):
         workspace = get_object_or_404(WorkSpace, id=workspace_id)
         if workspace.creator_id == int(user_id):
             raise BaseAppException(
-                detail="لا يمكن حذف مالك مساحة العمل. يجب نقل الملكية أولاً.",
+                detail="WORKSPACE OWNER CANNOT BE REMOVED",
                 code="WORKSPACE_OWNER_CANNOT_BE_REMOVED",
                 status_code=400,
             )
@@ -259,7 +281,8 @@ class WorkSpaceMemberViewSet(viewsets.ModelViewSet):
             ProjectRole.objects.filter(project__workspace_id=workspace_id, user_id=user_id).delete()
             Task.objects.filter(project__workspace_id=workspace_id, assigned_to_id=user_id).update(
                 assigned_to=None,
-                status="UNASSIGNED",
+    assignment_state="UNASSIGNED_RETURNED",
+    status="TODO",
             )
             WorkSpaceMember.objects.filter(workspace_id=workspace_id, user_id=user_id).delete()
 

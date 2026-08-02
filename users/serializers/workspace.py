@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from ..models import WorkSpace, WorkSpaceMember, Task
 from users.models import User
-
+from django.db.models import Count, Q
 
 class WorkSpaceMemberSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(source="user.id")
@@ -78,22 +78,66 @@ class WorkSpaceSerializer(serializers.ModelSerializer):
             return bool(user and obj.creator_id == user.id)
 
         def get_stats(self, obj):
-            total_tasks = Task.objects.filter(project__workspace=obj).count()
-            done_tasks = Task.objects.filter(
+            task_stats = Task.objects.filter(
                 project__workspace=obj,
-                status='DONE'
+                is_deleted=False,
+            ).aggregate(
+                total_tasks=Count("id"),
+                todo_tasks=Count(
+                    "id",
+                    filter=Q(status="TODO"),
+                ),
+                in_progress_tasks=Count(
+                    "id",
+                    filter=Q(status="INPROGRESS"),
+                ),
+                review_tasks=Count(
+                    "id",
+                    filter=Q(status="REVIEW"),
+                ),
+                paused_tasks=Count(
+                    "id",
+                    filter=Q(status="PAUSED"),
+                ),
+                completed_tasks=Count(
+                    "id",
+                    filter=Q(status="DONE"),
+                ),
+            )
+
+            total_tasks = task_stats["total_tasks"] or 0
+            completed_tasks = task_stats["completed_tasks"] or 0
+
+            progress_percentage = (
+                round(
+                    completed_tasks
+                    / total_tasks
+                    * 100
+                )
+                if total_tasks > 0
+                else 0
+            )
+
+            members_count = WorkSpaceMember.objects.filter(
+                workspace=obj,
+                user__is_active=True,
+                user__is_deleted=False,
             ).count()
 
-            progress_rate = round((done_tasks / total_tasks) * 100) if total_tasks > 0 else 0
+            projects_count = obj.projects.count()
 
             return {
-                "members_count": obj.members.count(),
-                "active_projects_count": obj.projects.filter(status='on_going').count(),
-                "progress_timeline": {
-                    "percentage": progress_rate,
-                    "completed_tasks": done_tasks,
-                    "total_tasks": total_tasks
-                }
+                "members_count": members_count,
+                "projects_count": projects_count,
+                "total_tasks": total_tasks,
+                "todo_tasks": task_stats["todo_tasks"] or 0,
+                "in_progress_tasks": (
+                    task_stats["in_progress_tasks"] or 0
+                ),
+                "review_tasks": task_stats["review_tasks"] or 0,
+                "paused_tasks": task_stats["paused_tasks"] or 0,
+                "completed_tasks": completed_tasks,
+                "progress_percentage": progress_percentage,
             }
 
         def get_permissions(self, obj):
@@ -112,6 +156,8 @@ class WorkSpaceSerializer(serializers.ModelSerializer):
                 "can_transfer_ownership": is_owner,
                 "can_leave": is_member and not is_owner,
                 "can_invite": is_owner or is_admin,
+                "can_view_members": is_member,
+                "can_manage_members": is_owner,
             }
 
         def get_actions(self, obj):

@@ -81,6 +81,7 @@ class TaskTransferService:
 
         task.assigned_to = new_assignee
         task.status = "TODO"
+        task.assignment_state="ASSIGNED"
         task.save(
             update_fields=[
                 "assigned_to",

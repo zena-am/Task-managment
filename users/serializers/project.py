@@ -41,8 +41,10 @@ class ProjectSerializer(serializers.ModelSerializer):
         is_workspace_owner = obj.workspace.creator_id == user.id
 
         return is_manager or is_workspace_owner
+
+
     def get_permissions(self, obj):
-        request = self.context.get('request')
+        request = self.context.get("request")
         user = request.user if request else None
 
         if not user or not user.is_authenticated:
@@ -52,28 +54,70 @@ class ProjectSerializer(serializers.ModelSerializer):
                 "can_delete": False,
                 "can_leave": False,
                 "can_invite": False,
+                "can_view_members": False,
+                "can_update_member_role": False,
+                "can_remove_member": False,
             }
 
-        is_owner = obj.workspace.creator_id == user.id
+        is_workspace_owner = (
+            obj.workspace.creator_id == user.id
+        )
 
-        is_member = ProjectRole.objects.filter(
-            project=obj,
-            user=user
-        ).exists()
+        is_workspace_admin = (
+            is_workspace_owner
+            or WorkSpaceMember.objects.filter(
+                workspace=obj.workspace,
+                user=user,
+                role="ADMIN",
+            ).exists()
+        )
 
-        is_admin = ProjectRole.objects.filter(
+        project_role = ProjectRole.objects.filter(
             project=obj,
             user=user,
-            role__in=["ADMIN", "MANAGER"]
-        ).exists()
+        ).values_list(
+            "role",
+            flat=True,
+        ).first()
+
+        is_project_member = project_role is not None
+        is_project_admin = project_role == "ADMIN"
+        is_project_manager = project_role == "MANAGER"
+
+        can_manage_project = (
+            is_workspace_admin
+            or is_project_admin
+        )
+
+        can_invite_members = (
+            is_workspace_admin
+            or is_project_admin
+            or is_project_manager
+        )
 
         return {
-            "can_view": is_member,
-            "can_edit": is_owner or is_admin,
-            "can_delete": is_owner,
-            "can_leave": is_member and not is_owner,
-            "can_invite": is_owner or is_admin,
+            "can_view": (
+                is_workspace_admin
+                or is_project_member
+            ),
+            "can_edit": can_manage_project,
+            "can_delete": is_workspace_owner,
+            "can_leave": (
+                is_project_member
+                and not is_workspace_owner
+            ),
+            "can_invite": can_invite_members,
+
+            "can_view_members": (
+                is_workspace_admin
+                or is_project_admin
+                or is_project_manager
+            ),
+            "can_update_member_role": can_manage_project,
+            "can_remove_member": can_manage_project,
         }
+
+
     def get_stats(self, obj):
         total_tasks = Task.objects.filter(project=obj).count()
         done_tasks = Task.objects.filter(project=obj, status='DONE').count()

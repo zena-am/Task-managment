@@ -69,13 +69,29 @@ class ProjectMemberDetailSerializer(serializers.ModelSerializer):
             'role',
             'total_tasks',
             'completed_tasks',
-            'can_delete'
+            'can_delete',
+            "can_update_role",
         ]
     def get_can_delete(self, obj):
-        request_user = self.context['request'].user
-        is_project_manager = ProjectRole.objects.filter(project=obj.project, user=request_user, role__in=['ADMIN', 'MANAGER']).exists()
-        return is_project_manager
+        requester_role = self._get_requester_role(obj)
 
+        can_delete = (
+            self._is_workspace_owner(obj)
+            or requester_role == "ADMIN"
+        )
+
+        if not can_delete:
+            return False
+
+        request = self.context.get("request")
+
+        if request and obj.user_id == request.user.id:
+            return False
+
+        if obj.role == "ADMIN":
+            return False
+
+        return True
     def get_role(self, obj):
         project_id = self.context.get('project_id')
         project_role = ProjectRole.objects.filter(project_id=project_id, user=obj.user).first()
@@ -90,6 +106,44 @@ class ProjectMemberDetailSerializer(serializers.ModelSerializer):
         project_id = self.context.get('project_id')
         return Task.objects.filter(project_id=project_id, assigned_to=obj.user, status='DONE').count()
 
+    def _get_requester_role(self, obj):
+        request = self.context.get("request")
+
+        if not request or not request.user.is_authenticated:
+            return None
+
+        return ProjectRole.objects.filter(
+            project=obj.project,
+            user=request.user,
+        ).values_list(
+            "role",
+            flat=True,
+        ).first()
+
+
+    def _is_workspace_owner(self, obj):
+        request = self.context.get("request")
+
+        if not request or not request.user.is_authenticated:
+            return False
+        
+
+        return (
+            obj.project.workspace.creator_id
+            == request.user.id
+        )
+    def get_can_update_role(self, obj):
+        requester_role = self._get_requester_role(obj)
+
+        request = self.context.get("request")
+
+        if request and obj.user_id == request.user.id:
+            return False
+
+        return (
+            self._is_workspace_owner(obj)
+            or requester_role in ["ADMIN", "MANAGER"]
+        )
 
 ###########################################################################################################
 
@@ -101,6 +155,8 @@ class WorkSpaceMemberDetailSerializer(serializers.ModelSerializer):
     total_workspace_tasks = serializers.SerializerMethodField()
     completed_workspace_tasks = serializers.SerializerMethodField()
     user = UserSerializer(read_only=True)
+    permissions = serializers.SerializerMethodField()
+
 
     class Meta:
         model = WorkSpaceMember
@@ -112,10 +168,40 @@ class WorkSpaceMemberDetailSerializer(serializers.ModelSerializer):
             'is_pinned',
             'assigned_projects_count',
             'total_workspace_tasks',
-            'completed_workspace_tasks'
+            'completed_workspace_tasks',
+            'permissions'
         ]
 
+        def get_permissions(self, obj):
+            request = self.context.get("request")
+            user = request.user if request else None
 
+            if not user or not user.is_authenticated:
+                return {
+                    "can_view": False,
+                    "can_update_role": False,
+                    "can_remove": False,
+                }
+
+            is_workspace_owner = (
+                obj.workspace.creator_id == user.id
+            )
+
+            target_is_owner = (
+                obj.workspace.creator_id == obj.user_id
+            )
+
+            return {
+                "can_view": is_workspace_owner,
+                "can_update_role": (
+                    is_workspace_owner
+                    and not target_is_owner
+                ),
+                "can_remove": (
+                    is_workspace_owner
+                    and not target_is_owner
+                ),
+            }
     def get_role(self, obj):
         workspace_id = self.context.get('workspace_id')
         member_role = WorkSpaceMember.objects.filter(workspace_id=workspace_id, user=obj.user).first()

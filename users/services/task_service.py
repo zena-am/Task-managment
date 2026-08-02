@@ -264,8 +264,12 @@ class TaskService:
             task = Task.objects.create(
                 creator=user,
                 status="TODO",
-                **validated_data,
-            )
+                assignment_state=(
+                    "ASSIGNED"
+                    if assigned_user is not None
+                    else "UNASSIGNED_NEW"
+                ),
+                **validated_data,)
 
             TaskService.create_dependencies(
                 task=task,

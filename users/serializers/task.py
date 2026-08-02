@@ -77,7 +77,7 @@ class TaskSerializer(serializers.ModelSerializer):
 
     blocked_by = serializers.SerializerMethodField()
     dependencies = serializers.SerializerMethodField()
-    dependents = serializers.SerializerMethodField()    
+    dependents = serializers.SerializerMethodField()
 
     class Meta:
         model = Task

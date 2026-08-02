@@ -5,6 +5,7 @@ from django.core.validators import validate_email
 
 from users.constants import create_activity_log, create_notification
 from users.errors.exceptions import (
+    BaseAppException,
     EmailAndWorkspaceRequired,
     InvitationForbidden,
     InvitationRejectForbidden,
@@ -102,7 +103,7 @@ class InvitationService:
 
     @staticmethod
     def _workspace_role(role):
-        return "ADMIN" if role == "ADMIN" else "MEMBER"
+        return "ADMIN"
 
     @staticmethod
     def _project_role(role):
@@ -165,6 +166,33 @@ class InvitationService:
 
     @staticmethod
     def send_workspace_invitation(sender, data):
+
+        can_invite = (
+            workspace.creator_id == sender.id
+            or WorkSpaceMember.objects.filter(
+                workspace=workspace,
+                user=sender,
+                role="ADMIN",
+            ).exists()
+        )
+
+        if not can_invite:
+            raise  BaseAppException(
+                            detail="You can only invite member to your own project.",
+                            code="PermissionDeniedError",
+                            status_code=403
+                        )
+        normalized_email = email.strip().lower()
+        sender_email = sender.email.strip().lower()
+
+        if normalized_email == sender_email:
+            raise ValidationError({
+                "email": (
+                    "You cannot send an invitation to yourself."
+                ),
+                "code": "CANNOT_INVITE_YOURSELF",
+            })
+
         workspace = InvitationService._get_workspace(
             data.get("workspace") or data.get("workspace_id")
         )
@@ -179,7 +207,20 @@ class InvitationService:
             email = item.get("email")
             role = InvitationService._workspace_role(
                 item.get("role") or data.get("role") or "MEMBER"
-            )
+            ).upper()
+            if role != "MEMBER":
+                    error_list.append({
+                        "type": "INVALID_WORKSPACE_ROLE",
+                        "email": email,
+                        "message": (
+                            "Workspace invitations can only assign "
+                            "the MEMBER role."
+                        ),
+                        "code": "WORKSPACE_INVITATION_MEMBER_ONLY",
+                    })
+                    continue
+
+            role = "MEMBER"
             email, email_error = InvitationService._validate_email(email)
             if email_error:
                 error_list.append(email_error)
@@ -259,6 +300,49 @@ class InvitationService:
         members_ids = InvitationService._normalize_list(data.get("members_ids"))
         sender_name = sender.get_full_name() or sender.username
         success_list, error_list = [], []
+        can_invite = ProjectRole.objects.filter(
+            project=project,
+            user=sender,
+            role__in=["ADMIN", "MANAGER"],
+        ).exists()
+
+
+        is_workspace_admin = (
+            project.workspace.creator_id == sender.id
+            or WorkSpaceMember.objects.filter(
+                workspace=project.workspace,
+                user=sender,
+                role="ADMIN",
+            ).exists()
+        )
+
+        sender_role = ProjectRole.objects.filter(
+                project=project,
+                user=sender,
+            ).values_list(
+                "role",
+                flat=True,
+            ).first()
+
+        is_project_admin = sender_role == "ADMIN"
+        is_project_manager = sender_role == "MANAGER"
+
+        can_invite = (
+                is_workspace_admin
+                or is_project_admin
+                or is_project_manager
+            )
+
+        if not can_invite:
+                raise BaseAppException(
+                    detail=(
+                        "You are not allowed to invite members "
+                        "to this project."
+                    ),
+                    code="PROJECT_INVITATION_FORBIDDEN",
+                    status_code=403,
+                )
+
 
         with transaction.atomic():
             for member in members_ids:
@@ -267,6 +351,20 @@ class InvitationService:
                     user_role = InvitationService._project_role(member.get("role") or role)
                 else:
                     user_id, user_role = member, role
+                if (
+                    is_project_manager
+                        and not is_workspace_admin
+                        and not is_project_admin
+                        and user_role != "EMPLOYEE"
+                    ):
+                        raise BaseAppException(
+                            detail=(
+                                "Project managers can only invite employees."
+                            ),
+                            code="MANAGER_CAN_INVITE_EMPLOYEE_ONLY",
+                            status_code=403,
+                        )
+
 
                 user_to_add = User.all_objects.filter(id=user_id).first()
                 if not user_to_add:
@@ -330,6 +428,19 @@ class InvitationService:
             for item in email_items:
                 email = item.get("email")
                 item_role = InvitationService._project_role(item.get("role") or role)
+                if (
+                    is_project_manager
+                    and not is_workspace_admin
+                    and not is_project_admin
+                    and item_role != "EMPLOYEE"
+                ):
+                    raise BaseAppException(
+                        detail=(
+                            "Project managers can only invite employees."
+                        ),
+                        code="MANAGER_CAN_INVITE_EMPLOYEE_ONLY",
+                        status_code=403,
+                    )
                 email, email_error = InvitationService._validate_email(email)
                 if email_error:
                     error_list.append(email_error)

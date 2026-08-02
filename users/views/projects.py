@@ -30,7 +30,6 @@ class ProjectViewSet(viewsets.ModelViewSet):
             return ProjectCreateSerializer
         return ProjectSerializer
 
-
     def get_queryset(self):
         user = self.request.user
 
@@ -173,7 +172,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             Task.objects.filter(project=project, assigned_to=user).update(
                 assigned_to=None,
-                status="UNASSIGNED",
+                assignment_state="UNASSIGNED_RETURNED",
+                status="TODO"
             )
             member_role.delete()
 

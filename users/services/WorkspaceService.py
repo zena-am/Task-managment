@@ -86,7 +86,8 @@ class WorkspaceServices:
                 project__workspace=workspace,
             ).update(
                 assigned_to=None,
-                status="UNASSIGNED",
+                assignment_state="UNASSIGNED_RETURNED",
+                status="TODO"
             )
 
             ProjectRole.objects.filter(

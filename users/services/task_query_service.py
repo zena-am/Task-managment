@@ -49,65 +49,128 @@ class TaskQueryService:
         queryset = TaskQueryService.filter_by_deadline(queryset, params.get("deadline"))
         return queryset.order_by("-id")
 
-    def get_tasks(user, params=None, workspace_id=None, project_id=None):
+    @staticmethod
+    def get_tasks(
+        user,
+        params=None,
+        workspace_id=None,
+        project_id=None,
+    ):
         params = params or {}
 
-        is_manager = ProjectRole.objects.filter(
-            user=user,
-            role__in=['ADMIN', 'MANAGER'],
-        ).exists()
+        project_id = (
+            project_id
+            or params.get("project")
+            or params.get("project_id")
+        )
 
-        queryset = Task.objects.all()
+        workspace_id = (
+            workspace_id
+            or params.get("workspace")
+            or params.get("workspace_id")
+        )
 
-        # 🔥 مهم جداً: الأساس دائماً
-        if is_manager and project_id:
-            queryset = queryset.filter(project_id=project_id)
-        else:
-            queryset = queryset.filter(assigned_to=user)
+        queryset = Task.objects.filter(
+            is_deleted=False,
+        )
 
-        # filters
-        queryset = TaskQueryService.filter_by_status(queryset, params.get("status"))
-        queryset = TaskQueryService.filter_by_priority(queryset, params.get("priority"))
-        queryset = TaskQueryService.filter_by_deadline(queryset, params.get("deadline"))
+        if project_id:
+            project_role = ProjectRole.objects.filter(
+                project_id=project_id,
+                user=user,
+            ).first()
 
-        return queryset.order_by("-id")
-    @staticmethod
-    def get_tasks(user, params=None, workspace_id=None, project_id=None):
-            params = params or {}
+            is_workspace_admin = WorkSpaceMember.objects.filter(
+                workspace_id=workspace_id,
+                user=user,
+                role="ADMIN",
+            ).exists() if workspace_id else False
 
-            queryset = Task.objects.all()
-
-            is_admin_ws = False
-            is_manager_project = False
-
-            if workspace_id:
-                is_admin_ws = WorkSpaceMember.objects.filter(
-                    workspace_id=workspace_id,
-                    user=user,
-                    role='ADMIN',
-                ).exists()
-
-            if project_id:
-                is_manager_project = ProjectRole.objects.filter(
-                    project_id=project_id,
-                    user=user,
-                    role__in=['ADMIN', 'MANAGER'],
-                ).exists()
-
-            # 🎯 CORE RULE
-            if is_admin_ws or is_manager_project:
+            if (
+                is_workspace_admin
+                or (
+                    project_role
+                    and project_role.role in ["ADMIN", "MANAGER"]
+                )
+            ):
                 queryset = queryset.filter(
-                    Q(project_id=project_id) if project_id else Q()
+                    project_id=project_id,
+                )
+
+            else:
+                queryset = queryset.filter(
+                    project_id=project_id,
+                    assigned_to=user,
+                )
+
+        elif workspace_id:
+            is_workspace_admin = WorkSpaceMember.objects.filter(
+                workspace_id=workspace_id,
+                user=user,
+                role="ADMIN",
+            ).exists()
+
+            if is_workspace_admin:
+                queryset = queryset.filter(
+                    project__workspace_id=workspace_id,
                 )
             else:
-                queryset = queryset.filter(assigned_to=user)
+                allowed_project_ids = ProjectRole.objects.filter(
+                    user=user,
+                    project__workspace_id=workspace_id,
+                ).values_list(
+                    "project_id",
+                    flat=True,
+                )
 
-            # filters
-            queryset = TaskQueryService.filter_by_status(queryset, params.get("status"))
-            queryset = TaskQueryService.filter_by_priority(queryset, params.get("priority"))
-            queryset = TaskQueryService.filter_by_deadline(queryset, params.get("deadline"))
+                queryset = queryset.filter(
+                    Q(
+                        project_id__in=allowed_project_ids,
+                        assigned_to=user,
+                    )
+                    | Q(
+                        project_id__in=ProjectRole.objects.filter(
+                            user=user,
+                            role__in=["ADMIN", "MANAGER"],
+                            project__workspace_id=workspace_id,
+                        ).values_list(
+                            "project_id",
+                            flat=True,
+                        )
+                    )
+                )
 
-            return queryset.order_by("-id")
+        else:
+            managed_project_ids = ProjectRole.objects.filter(
+                user=user,
+                role__in=["ADMIN", "MANAGER"],
+            ).values_list(
+                "project_id",
+                flat=True,
+            )
+
+            queryset = queryset.filter(
+                Q(assigned_to=user)
+                | Q(project_id__in=managed_project_ids)
+            )
+
+        queryset = TaskQueryService.filter_by_status(
+            queryset,
+            params.get("status"),
+        )
+
+        queryset = TaskQueryService.filter_by_priority(
+            queryset,
+            params.get("priority"),
+        )
+
+        queryset = TaskQueryService.filter_by_deadline(
+            queryset,
+            params.get("deadline"),
+        )
+
+        return queryset.distinct().order_by("-id")
+
 
     @staticmethod
     def filter_by_status(queryset, status_param):
@@ -123,24 +186,31 @@ class TaskQueryService:
         return queryset.filter(status=status_param)
 
     @staticmethod
-    def filter_by_priority(queryset, priority_param):
-        if not priority_param:
+    def filter_by_status(queryset, status_param):
+        if not status_param:
             return queryset
 
-        priority_map = {
-            "low": "L",
-            "l": "L",
-            "medium": "M",
-            "m": "M",
-            "high": "H",
-            "h": "H",
-        }
+        status_param = status_param.upper()
 
-        mapped = priority_map.get(priority_param.lower())
-        if not mapped:
-            raise InvalidPriorityError()
+        if status_param == "UNASSIGNED":
+            return queryset.filter(
+                assigned_to__isnull=True,
+            )
 
-        return queryset.filter(priority=mapped)
+        allowed = [
+            "TODO",
+            "INPROGRESS",
+            "REVIEW",
+            "DONE",
+            "PAUSED",
+        ]
+
+        if status_param not in allowed:
+            raise InvalidStatusError()
+
+        return queryset.filter(
+            status=status_param,
+        )
 
     @staticmethod
     def filter_by_deadline(queryset, deadline_param):
@@ -174,7 +244,7 @@ class TaskQueryService:
 
 class TaskCart:
     @staticmethod
-    def get_user_card_stats(user):
+    def get_user_card_stats2(user):
         stats = Task.objects.filter(assigned_to=user).aggregate(
             todo_count=Count('id', filter=Q(status='TODO')),
             in_progress_count=Count('id', filter=Q(status='INPROGRESS')),
