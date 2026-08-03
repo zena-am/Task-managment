@@ -70,9 +70,14 @@ class WorkSpaceSerializer(serializers.ModelSerializer):
             return membership.is_pinned if membership else False
 
         def get_user_role(self, obj):
-            membership = self._get_membership(obj)
-            return membership.role if membership else None
+            user = self._get_request_user()
 
+            if user and obj.creator_id == user.id:
+                return "ADMIN"
+
+            membership = self._get_membership(obj)
+
+            return membership.role if membership else None
         def get_is_owner(self, obj):
             user = self._get_request_user()
             return bool(user and obj.creator_id == user.id)
@@ -158,6 +163,10 @@ class WorkSpaceSerializer(serializers.ModelSerializer):
                 "can_invite": is_owner or is_admin,
                 "can_view_members": is_member,
                 "can_manage_members": is_owner,
+                "can_view_team_tasks": (
+                    is_owner
+                    or is_admin
+),
             }
 
         def get_actions(self, obj):

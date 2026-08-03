@@ -94,7 +94,7 @@ class TaskSerializer(serializers.ModelSerializer):
             'start_time', 'end_time', 'link','due_date','permissions','state_label','task_actions','role_in_project',
             'assigned_to', 'assigned_to_detail','supervisors_detail', 'supervisors',  'is_overdue','images','files',
             'dependencies',
-    'dependents',
+                'dependents',
         ]
 
         read_only_fields = ['start_time', 'end_time']
@@ -272,6 +272,30 @@ class TaskSerializer(serializers.ModelSerializer):
                 or is_owner
                 or is_assigned
             ),
+            "can_view_unassigned_tasks": (
+            is_manager
+            or is_owner
+        ),
+
+        "can_view_archived_tasks": (
+            is_manager
+            or is_owner
+        ),
+
+        "can_view_deleted_tasks": (
+            is_manager
+            or is_owner
+        ),
+
+        "can_restore_tasks": (
+            is_manager
+            or is_owner
+        ),
+
+        "can_assign_tasks": (
+            is_manager
+            or is_owner
+        ),
         }
 
     def get_state_label(self, obj):
@@ -598,30 +622,137 @@ class ProjectWithoutManagerSerializer(serializers.ModelSerializer):
             assigned_to__isnull=True
         ).count()
 
-"""
-    def get_task_actions(self, obj):
-        request = self.context.get("request")
-        user = request.user if request else None
 
-        if not user or not user.is_authenticated:
-            return {}
 
-        is_assigned = obj.assigned_to_id == user.id
+from rest_framework import serializers
 
-        is_manager = obj.project.projectrole_set.filter(
-            user=user,
-            role__in=["ADMIN", "MANAGER"]
-        ).exists()
+from users.models import ActivityLog
 
-        is_creator = obj.project.workspace.creator_id == user.id
+
+class TaskHistorySerializer(
+    serializers.ModelSerializer
+):
+    actor = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ActivityLog
+        fields = [
+            "id",
+            "action",
+            "action_id",
+            "actor",
+            "changes",
+            "created_at",
+        ]
+
+    def get_actor(self, obj):
+        if not obj.user:
+            return None
 
         return {
-            "can_start": is_assigned and obj.status == "TODO",
-            "can_pause": is_assigned and obj.status == "INPROGRESS",
-            "can_send_to_review": is_assigned and obj.status == "INPROGRESS",
-            "can_mark_done_directly": is_manager,
-            "can_reassign": is_manager,
-            "can_mark_done_directly": is_manager,
-            "can_change_status":   is_assigned,
+            "id": obj.user.id,
+            "username": obj.user.username,
+            "full_name": (
+                obj.user.get_full_name()
+                or obj.user.username
+            ),
+            "avatar": self._avatar_url(
+                obj.user,
+            ),
         }
-        """
+
+    def _avatar_url(self, user):
+        if not getattr(user, "avatar", None):
+            return None
+
+        request = self.context.get("request")
+        url = user.avatar.url
+
+        if request:
+            return request.build_absolute_uri(url)
+
+        return url
+class WorkspaceProjectTasksSerializer(
+    serializers.Serializer
+):
+    id = serializers.IntegerField(
+        source="project.id"
+    )
+    name = serializers.CharField(
+        source="project.name"
+    )
+    status = serializers.CharField(
+        source="project.status"
+    )
+    status_display = serializers.CharField(
+        source="project.get_status_display"
+    )
+    tasks_count = serializers.IntegerField()
+    tasks = TaskSerializer(
+        many=True,
+        read_only=True,
+    )
+
+
+class UserWorkspaceTasksGroupedSerializer(
+    serializers.Serializer
+):
+    workspace_id = serializers.IntegerField()
+    total_tasks = serializers.IntegerField()
+    projects = WorkspaceProjectTasksSerializer(
+        many=True,
+    )
+
+class WorkspaceTeamMemberSerializer(
+    serializers.Serializer
+):
+    id = serializers.IntegerField(
+        source="member.id",
+    )
+
+    username = serializers.CharField(
+        source="member.username",
+    )
+
+    first_name = serializers.CharField(
+        source="member.first_name",
+    )
+
+    last_name = serializers.CharField(
+        source="member.last_name",
+    )
+
+    avatar = serializers.SerializerMethodField()
+
+    workspace_role = serializers.CharField()
+    tasks_count = serializers.IntegerField()
+
+    projects = WorkspaceProjectTasksSerializer(
+        many=True,
+    )
+
+    def get_avatar(self, obj):
+        member = obj["member"]
+
+        if not member.avatar:
+            return None
+
+        request = self.context.get("request")
+        url = member.avatar.url
+
+        if request:
+            return request.build_absolute_uri(url)
+
+        return url
+
+
+class WorkspaceTeamTasksGroupedSerializer(
+    serializers.Serializer
+):
+    workspace_id = serializers.IntegerField()
+    total_members = serializers.IntegerField()
+    total_tasks = serializers.IntegerField()
+
+    members = WorkspaceTeamMemberSerializer(
+        many=True,
+    )

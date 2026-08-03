@@ -2,16 +2,16 @@ from datetime import datetime, timedelta
 
 from django.db.models import F, Q, Count
 from django.utils import timezone
-
-from users.errors.exceptions import InvalidPriorityError, InvalidStatusError
-from users.models import ProjectRole, Task, WorkSpaceMember
+from rest_framework.exceptions import ValidationError
+from users.errors.exceptions import InvalidPriorityError, InvalidStatusError, PermissionDeniedError
+from users.models import Project, ProjectRole, Task, WorkSpace, WorkSpaceMember
 
 
 class TaskQueryService:
     @staticmethod
     def get_user_tasks(user, params):
         params = params or {}
-
+        params.get("archived"),
         project_id = params.get("project_id")
 
         queryset = Task.objects.filter(assigned_to=user)
@@ -22,33 +22,82 @@ class TaskQueryService:
         queryset = TaskQueryService.filter_by_status(queryset, params.get("status"))
         queryset = TaskQueryService.filter_by_priority(queryset, params.get("priority"))
         queryset = TaskQueryService.filter_by_deadline(queryset, params.get("deadline"))
-
+        queryset = TaskQueryService.filter_by_archived(
+            queryset,
+            params.get("archived"),
+        )
         return queryset.order_by("-id")
 
     @staticmethod
-    def get_user_tasks_in_workspace(user, workspace_id, project_id, params=None):
+    def get_user_workspace_tasks_grouped(
+        *,
+        user,
+        workspace_id,
+        params=None,
+    ):
         params = params or {}
-        is_admin = WorkSpaceMember.objects.filter(
+
+        is_workspace_member = WorkSpaceMember.objects.filter(
             workspace_id=workspace_id,
             user=user,
-            role='ADMIN',
-        ).exists()
-        is_manager = ProjectRole.objects.filter(
-            project_id=project_id,
-            user=user,
-            role__in=['ADMIN', 'MANAGER'],
         ).exists()
 
-        if is_admin or is_manager:
-            queryset = Task.objects.filter(project_id=project_id).distinct()
-        else:
-            queryset = Task.objects.filter(project_id=project_id, assigned_to=user).distinct()
+        if not is_workspace_member:
+            raise PermissionDeniedError()
 
-        queryset = TaskQueryService.filter_by_status(queryset, params.get("status"))
-        queryset = TaskQueryService.filter_by_priority(queryset, params.get("priority"))
-        queryset = TaskQueryService.filter_by_deadline(queryset, params.get("deadline"))
-        return queryset.order_by("-id")
+        projects = Project.objects.filter(
+            workspace_id=workspace_id,
+            projectrole__user=user,
+        ).distinct().order_by("-id")
 
+        result = []
+        total_tasks = 0
+
+        for project in projects:
+            tasks = Task.objects.filter(
+                project=project,
+                assigned_to=user,
+                is_deleted=False,
+            ).select_related(
+                "project",
+                "assigned_to",
+            )
+
+            tasks = TaskQueryService.filter_by_status(
+                tasks,
+                params.get("status"),
+            )
+
+            tasks = TaskQueryService.filter_by_priority(
+                tasks,
+                params.get("priority"),
+            )
+
+            tasks = TaskQueryService.filter_by_deadline(
+                tasks,
+                params.get("deadline"),
+            )
+
+            tasks = TaskQueryService.filter_by_archived(
+                tasks,
+                params.get("archived"),
+            )
+
+            tasks = tasks.order_by("-id")
+            tasks_count = tasks.count()
+            total_tasks += tasks_count
+
+            result.append({
+                "project": project,
+                "tasks": tasks,
+                "tasks_count": tasks_count,
+            })
+
+        return {
+            "workspace_id": int(workspace_id),
+            "projects": result,
+            "total_tasks": total_tasks,
+        }
     @staticmethod
     def get_tasks(
         user,
@@ -168,22 +217,77 @@ class TaskQueryService:
             queryset,
             params.get("deadline"),
         )
+        queryset = TaskQueryService.filter_by_archived(
+        queryset,
+        params.get("archived"),
+    )
 
         return queryset.distinct().order_by("-id")
 
-
     @staticmethod
-    def filter_by_status(queryset, status_param):
-        allowed = ["UNASSIGNED", "TODO", "INPROGRESS", "REVIEW", "DONE"]
+    def get_project_tasks(
+        *,
+        user,
+        project_id,
+        params=None,
+    ):
+        params = params or {}
 
-        if not status_param:
-            return queryset
+        project_role = ProjectRole.objects.filter(
+            project_id=project_id,
+            user=user,
+        ).values_list(
+            "role",
+            flat=True,
+        ).first()
 
-        status_param = status_param.upper()
-        if status_param not in allowed:
-            raise InvalidStatusError()
+        is_workspace_owner = WorkSpaceMember.objects.filter(
+            workspace__projects__id=project_id,
+            workspace__creator=user,
+        ).exists()
 
-        return queryset.filter(status=status_param)
+        if not project_role and not is_workspace_owner:
+            raise PermissionDeniedError()
+
+        queryset = Task.objects.filter(
+            project_id=project_id,
+            is_deleted=False,
+        )
+
+        can_view_all_tasks = (
+            is_workspace_owner
+            or project_role in [
+                "ADMIN",
+                "MANAGER",
+            ]
+        )
+
+        if not can_view_all_tasks:
+            queryset = queryset.filter(
+                assigned_to=user,
+            )
+
+        queryset = TaskQueryService.filter_by_status(
+            queryset,
+            params.get("status"),
+        )
+
+        queryset = TaskQueryService.filter_by_priority(
+            queryset,
+            params.get("priority"),
+        )
+
+        queryset = TaskQueryService.filter_by_deadline(
+            queryset,
+            params.get("deadline"),
+        )
+
+        queryset = TaskQueryService.filter_by_archived(
+            queryset,
+            params.get("archived"),
+        )
+
+        return queryset.distinct().order_by("-id")
 
     @staticmethod
     def filter_by_status(queryset, status_param):
@@ -242,27 +346,277 @@ class TaskQueryService:
         return queryset
 
 
-class TaskCart:
+
+
     @staticmethod
-    def get_user_card_stats2(user):
-        stats = Task.objects.filter(assigned_to=user).aggregate(
-            todo_count=Count('id', filter=Q(status='TODO')),
-            in_progress_count=Count('id', filter=Q(status='INPROGRESS')),
-            review_count=Count('id', filter=Q(status='REVIEW')),
-            completed_count=Count('id', filter=Q(status='DONE')),
+    def filter_by_archived(
+        queryset,
+        archived_param,
+    ):
+        if archived_param is None:
+            return queryset.filter(
+                is_archived=False,
+            )
+
+        archived_value = str(
+            archived_param
+        ).strip().lower()
+
+        if archived_value in [
+            "true",
+            "1",
+            "yes",
+        ]:
+            return queryset.filter(
+                is_archived=True,
+            )
+
+        if archived_value in [
+            "false",
+            "0",
+            "no",
+        ]:
+            return queryset.filter(
+                is_archived=False,
+            )
+
+        if archived_value == "all":
+            return queryset
+
+        raise ValidationError({
+            "archived": (
+                "Archived must be true, false, or all."
+            )
+        })
+    @staticmethod
+    def filter_by_priority(
+        queryset,
+        priority_param,
+    ):
+        if not priority_param:
+            return queryset
+
+        priority_map = {
+            "low": "L",
+            "l": "L",
+            "medium": "M",
+            "m": "M",
+            "high": "H",
+            "h": "H",
+        }
+
+        priority = priority_map.get(
+            str(priority_param).lower()
         )
 
+        if not priority:
+            raise InvalidPriorityError()
+
+        return queryset.filter(
+            priority=priority,
+        )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    @staticmethod
+    def get_workspace_team_tasks_grouped(
+        *,
+        user,
+        workspace_id,
+        params=None,
+    ):
+        params = params or {}
+
+        membership = WorkSpaceMember.objects.filter(
+            workspace_id=workspace_id,
+            user=user,
+        ).first()
+
+        is_workspace_owner = WorkSpace.objects.filter(
+            id=workspace_id,
+            creator=user,
+        ).exists()
+
+        is_workspace_admin = bool(
+            membership
+            and membership.role == "ADMIN"
+        )
+
+        if not (
+            is_workspace_owner
+            or is_workspace_admin
+        ):
+            raise PermissionDeniedError()
+
+        members = (
+            WorkSpaceMember.objects
+            .filter(
+                workspace_id=workspace_id,
+                user__is_deleted=False,
+            )
+            .select_related("user")
+            .order_by("user__username")
+        )
+
+        result_members = []
+        total_tasks = 0
+
+        for membership_item in members:
+            member = membership_item.user
+
+            projects = (
+                Project.objects
+                .filter(
+                    workspace_id=workspace_id,
+                    projectrole__user=member,
+                )
+                .distinct()
+                .order_by("name")
+            )
+
+            project_results = []
+            member_tasks_count = 0
+
+            for project in projects:
+                tasks = (
+                    Task.objects
+                    .filter(
+                        project=project,
+                        assigned_to=member,
+                        is_deleted=False,
+                    )
+                    .select_related(
+                        "project",
+                        "assigned_to",
+                    )
+                )
+
+                tasks = TaskQueryService.filter_by_status(
+                    tasks,
+                    params.get("status"),
+                )
+
+                tasks = TaskQueryService.filter_by_priority(
+                    tasks,
+                    params.get("priority"),
+                )
+
+                tasks = TaskQueryService.filter_by_deadline(
+                    tasks,
+                    params.get("deadline"),
+                )
+
+                tasks = TaskQueryService.filter_by_archived(
+                    tasks,
+                    params.get("archived"),
+                )
+
+                tasks = tasks.order_by("-id")
+                tasks_count = tasks.count()
+
+                if tasks_count == 0:
+                    continue
+
+                member_tasks_count += tasks_count
+
+                project_results.append({
+                    "project": project,
+                    "tasks": tasks,
+                    "tasks_count": tasks_count,
+                })
+
+            total_tasks += member_tasks_count
+
+            result_members.append({
+                "member": member,
+                "workspace_role": membership_item.role,
+                "tasks_count": member_tasks_count,
+                "projects": project_results,
+            })
+
         return {
-            "todo_tasks_count": stats['todo_count'] or 0,
-            "in_progress_tasks_count": stats['in_progress_count'] or 0,
-            "review_tasks_count": stats['review_count'] or 0,
-            "completed_tasks_count": stats['completed_count'] or 0,
+            "workspace_id": int(workspace_id),
+            "total_members": len(result_members),
+            "total_tasks": total_tasks,
+            "members": result_members,
         }
 
 
 
 
 
+
+
+
+
+
+
+
+class TaskCart:
+
+    @staticmethod
+    def get_user_card_stats2(user):
+            stats = Task.objects.filter(
+                assigned_to=user,
+                is_deleted=False,
+                is_archived=False,
+            ).aggregate(
+                todo_count=Count(
+                    "id",
+                    filter=Q(status="TODO"),
+                ),
+                in_progress_count=Count(
+                    "id",
+                    filter=Q(
+                        status="INPROGRESS"
+                    ),
+                ),
+                review_count=Count(
+                    "id",
+                    filter=Q(status="REVIEW"),
+                ),
+                paused_count=Count(
+                    "id",
+                    filter=Q(status="PAUSED"),
+                ),
+                completed_count=Count(
+                    "id",
+                    filter=Q(status="DONE"),
+                ),
+            )
+
+            return {
+                "todo_tasks_count": (
+                    stats["todo_count"] or 0
+                ),
+                "in_progress_tasks_count": (
+                    stats["in_progress_count"] or 0
+                ),
+                "review_tasks_count": (
+                    stats["review_count"] or 0
+                ),
+                "paused_tasks_count": (
+                    stats["paused_count"] or 0
+                ),
+                "completed_tasks_count": (
+                    stats["completed_count"] or 0
+                ),
+            }
 
 
 
@@ -282,6 +636,8 @@ class ProjectTaskCart:
             in_progress_count=Count('id', filter=Q(status='INPROGRESS')),
             review_count=Count('id', filter=Q(status='REVIEW')),
             completed_count=Count('id', filter=Q(status='DONE')),
+                is_deleted=False,
+                is_archived=False,
         )
 
         user_tasks_stats = Task.objects.filter(project=project, assigned_to=user).aggregate(
@@ -289,6 +645,7 @@ class ProjectTaskCart:
             in_progress_count=Count('id', filter=Q(status='INPROGRESS')),
             review_count=Count('id', filter=Q(status='REVIEW')),
             completed_count=Count('id', filter=Q(status='DONE')),
+
         )
 
         team_tasks_stats = None
@@ -298,7 +655,10 @@ class ProjectTaskCart:
                 in_progress_count=Count('id', filter=Q(status='INPROGRESS')),
                 review_count=Count('id', filter=Q(status='REVIEW')),
                 completed_count=Count('id', filter=Q(status='DONE')),
+
+
             )
+
 
         return {
             "project_total_tasks": {
@@ -320,3 +680,8 @@ class ProjectTaskCart:
                 "completed": team_tasks_stats['completed_count'] or 0,
             } if team_tasks_stats else None,
         }
+
+
+
+
+

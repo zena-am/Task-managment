@@ -11,7 +11,7 @@ from users.views.members_views import ProjectMemberViewSet, WorkSpaceMemberViewS
 from users.views.profile import ProfileView
 from users.views.report import BugReportViewSet, RequestFormViewSet, TechnicalReportViewSet
 from users.views.searchItems import ProjectSearchViewSet, WorkspaceSearchViewSet
-from users.views.tasks import ClaimTaskAPIView, ReviewTechnicalReportAPIView, TaskStatusUpdateAPIView, TransferTaskToUser
+from users.views.tasks import ArchiveTaskAPIView, ClaimTaskAPIView, ReviewTechnicalReportAPIView, TaskHistoryAPIView, TaskStatusUpdateAPIView, TransferTaskToUser, UnarchiveTaskAPIView
 from users.views.workspaces import LeaveWorkspaceAPIView, TogglePinWorkspaceAPIView, WorkspaceViewSet
 
 ##[http://127.0.0.1:8000/user/api/docs/](http://127.0.0.1:8000/api/docs/)
@@ -59,7 +59,20 @@ urlpatterns = [
     path('workspaces/<int:workspace_id>/leave/', LeaveWorkspaceAPIView.as_view(), name='workspace-leave'),
     path('dashboard/', DashboardView.as_view(), name='dashboard-main'),
 
+    path(
+        "api/tasks/<int:task_id>/archive/",
+        ArchiveTaskAPIView.as_view(),
+    ),
+    path(
+    "api/tasks/<int:task_id>/history/",
+    TaskHistoryAPIView.as_view(),
+    name="task-history",
+),
 
+    path(
+        "api/tasks/<int:task_id>/unarchive/",
+        UnarchiveTaskAPIView.as_view(),
+    ),
 
     path(
         "api/tasks/<int:task_id>/dependencies/",

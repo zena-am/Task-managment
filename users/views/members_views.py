@@ -13,8 +13,9 @@ from users.errors.exceptions import (
     RoleRequiredError,
 )
 from users.errors.messages.success import success_response
-from users.models import WorkSpace, WorkSpaceMember, ProjectRole, Task
+from users.models import Project, WorkSpace, WorkSpaceMember, ProjectRole, Task
 from users.constants import create_activity_log
+from users.services.task_transfer_service import RoleService
 from ..permissions import IsTeamManagerForProject, IsWorkspaceOwner
 from ..serializers import ProjectMemberDetailSerializer, WorkSpaceMemberDetailSerializer
 
@@ -60,56 +61,60 @@ class ProjectMemberViewSet(viewsets.ModelViewSet):
             code="PROJECT_MEMBER_RETRIEVED",
             data=serializer.data,
         ), status=status.HTTP_200_OK)
-
     def partial_update(self, request, *args, **kwargs):
-        project_id = kwargs.get('project_pk')
-        member_id = kwargs.get('pk')
-        workspace = member.workspace
+        project_id = kwargs.get("project_pk")
+        member_id = kwargs.get("pk")
 
+        project = get_object_or_404(
+            Project.objects.select_related(
+                "workspace",
+            ),
+            id=project_id,
+        )
 
+        member = get_object_or_404(
+            ProjectRole.objects.select_related(
+                "user",
+            ),
+            project=project,
+            user_id=member_id,
+        )
 
-        if not ProjectRole.objects.filter(
-            project_id=project_id,
-            user=request.user,
-            role__in=['MANAGER', 'ADMIN'],
-        ).exists():
-            raise PermissionDeniedError()
-
-        member = ProjectRole.objects.filter(project_id=project_id, user_id=member_id).first()
-        if not member:
-            raise ProjectRoleNotFound()
-
-        new_role = request.data.get('role')
+        new_role = request.data.get("role")
+        if new_role not in ['ADMIN', 'MANAGER', 'EMPLOYEE']:
+                    raise BaseAppException(
+                        detail="Invalid project role",
+                        code="INVALID_PROJECT_ROLE",
+                        status_code=400,
+                    )
         if not new_role:
             raise RoleRequiredError()
-
-        if new_role not in ['ADMIN', 'MANAGER', 'EMPLOYEE']:
-            raise BaseAppException(
-                detail="Invalid project role",
-                code="INVALID_PROJECT_ROLE",
-                status_code=400,
-            )
-
         if new_role == "ADMIN":
-            existing_admin = ProjectRole.objects.filter(project_id=project_id, role="ADMIN").exclude(user_id=member_id)
-            if existing_admin.exists():
-                raise OnlyOneWorkspaceAdminError()
+                    existing_admin = ProjectRole.objects.filter(project_id=project_id, role="ADMIN").exclude(user_id=member_id)
+                    if existing_admin.exists():
+                        raise OnlyOneWorkspaceAdminError()
 
-        old_role = member.role
-        member.role = new_role
-        member.save(update_fields=['role'])
-        if old_role != new_role:
-            create_activity_log(user=request.user, action="ROLE_UPDATED", action_id=member.user_id, changes={"project_id": int(project_id), "old_role": old_role, "new_role": new_role, "reason": "Project member role updated"})
+        updated_role = RoleService.set_user_role(
+            project=project,
+            user=member.user,
+            new_role=new_role,
+            performed_by=request.user,
+        )
 
-        return Response(success_response(
-            message="Member role updated successfully",
-            code="PROJECT_MEMBER_ROLE_UPDATED",
-            data={
-                "member_id": member.id,
-                "user_id": member.user.id,
-                "role": member.role,
-            },
-        ), status=status.HTTP_200_OK)
+        serializer = self.get_serializer(
+            updated_role,
+        )
+
+        return Response(
+            success_response(
+                message=(
+                    "Member role updated successfully"
+                ),
+                code="PROJECT_MEMBER_ROLE_UPDATED",
+                data=serializer.data,
+            ),
+            status=status.HTTP_200_OK,
+        )
 
     def destroy(self, request, *args, **kwargs):
         project_id = kwargs.get('project_pk')

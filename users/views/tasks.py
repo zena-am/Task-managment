@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter
@@ -14,7 +15,8 @@ from users.errors.messages.success import success_response
 from users.models import Project, ProjectRole, Task, TechnicalReportForm
 from users.permissions import CanUpdateTaskStatus, IsTeamManager, IsTeamManagerForProject, TaskPermission
 from users.serializers import TaskCreateUpdateSerializer, TaskSerializer, ManagerReportReviewSerializer
-from users.serializers.task import ProjectWithoutManagerSerializer, TechnicalReportDetailSerializer
+from users.serializers.task import ProjectWithoutManagerSerializer, TaskHistorySerializer, TechnicalReportDetailSerializer, UserWorkspaceTasksGroupedSerializer, WorkspaceTeamTasksGroupedSerializer
+from users.services.taskHistory import TaskHistoryService
 from users.services.task_query_service import ProjectTaskCart, TaskCart, TaskQueryService
 from users.services.task_service import TaskService
 from users.services.task_transfer_service import ProjectService, RoleService, TaskTransferService
@@ -119,18 +121,34 @@ class TaskView(viewsets.ModelViewSet):
         ), status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
+        if "status" in request.data:
+            raise BaseAppException(
+                detail=(
+                    "Use the task status update endpoint "
+                    "to change task status."
+                ),
+                code="USE_STATUS_UPDATE_ENDPOINT",
+                status_code=400,
+            )
+
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
-        status_value = request.data.get("status")
-        TaskService.perform_update(serializer, instance, request.user, status_value)
-        response_serializer = TaskSerializer(instance, context=self.get_serializer_context())
-        return Response(success_response(
-            message="Task updated successfully",
-            code="TASK_UPDATED",
-            data=response_serializer.data,
-        ), status=status.HTTP_200_OK)
+        serializer.save()
+        response_serializer = TaskSerializer(
+            instance,
+            context=self.get_serializer_context(),
+        )
+
+        return Response(
+            success_response(
+                message="Task updated successfully",
+                code="TASK_UPDATED",
+                data=response_serializer.data,
+            ),
+            status=status.HTTP_200_OK,
+        )
 
     def partial_update(self, request, *args, **kwargs):
         kwargs['partial'] = True
@@ -179,13 +197,14 @@ class TaskView(viewsets.ModelViewSet):
     @extend_schema(tags=['المهام'], summary="جلب قائمة المهام الخاصة بالمستخدم")
     @action(detail=False, methods=['get'], url_path='user')
     def userTask(self, request):
-        queryset = Task.objects.filter(assigned_to=request.user,is_deleted=False,).distinct()
+        queryset = Task.objects.filter(assigned_to=request.user,is_deleted=False,is_archived=False).distinct()
         serializer = TaskSerializer(queryset, many=True, context=self.get_serializer_context())
         return Response(success_response(
             message="User tasks retrieved successfully",
             code="USER_TASKS_RETRIEVED",
             data=serializer.data,
         ), status=status.HTTP_200_OK)
+
 
     @extend_schema(tags=['المهام'], summary="جلب المهام التي يديرها المدير حالياً")
     @action(detail=False, methods=['get'], url_path='supervised', permission_classes=[IsAuthenticated, IsTeamManager])
@@ -194,7 +213,7 @@ class TaskView(viewsets.ModelViewSet):
             user=request.user,
             role__in=['ADMIN', 'MANAGER'],
         ).values_list('project_id', flat=True)
-        queryset = Task.objects.filter(project_id__in=managed_project_ids,is_deleted=False,).distinct()
+        queryset = Task.objects.filter(project_id__in=managed_project_ids,is_deleted=False,is_archived=False).distinct()
 
         serializer = TaskSerializer(queryset, many=True, context=self.get_serializer_context())
         return Response(success_response(
@@ -202,6 +221,171 @@ class TaskView(viewsets.ModelViewSet):
             code="MANAGED_TASKS_RETRIEVED",
             data=serializer.data,
         ), status=status.HTTP_200_OK)
+
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=(
+            r"user/workspace/"
+            r"(?P<workspace_id>\d+)/grouped"
+        ),
+    )
+
+    def user_workspace_tasks_grouped(
+        self,
+        request,
+        workspace_id=None,
+    ):
+        result = (
+            TaskQueryService
+            .get_user_workspace_tasks_grouped(
+                user=request.user,
+                workspace_id=workspace_id,
+                params=request.query_params,
+            )
+        )
+
+        serializer = (
+            UserWorkspaceTasksGroupedSerializer(
+                result,
+                context=self.get_serializer_context(),
+            )
+        )
+
+        return Response(
+            success_response(
+                message=(
+                    "Workspace tasks grouped by project "
+                    "retrieved successfully"
+                ),
+                code=(
+                    "WORKSPACE_TASKS_GROUPED_RETRIEVED"
+                ),
+                data=serializer.data,
+            ),
+            status=status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=(
+            r"team/workspace/"
+            r"(?P<workspace_id>\d+)/grouped"
+        ),
+    )
+    def workspace_team_tasks_grouped(
+        self,
+        request,
+        workspace_id=None,
+    ):
+        result = (
+            TaskQueryService
+            .get_workspace_team_tasks_grouped(
+                user=request.user,
+                workspace_id=workspace_id,
+                params=request.query_params,
+            )
+        )
+
+        serializer = WorkspaceTeamTasksGroupedSerializer(
+            result,
+            context=self.get_serializer_context(),
+        )
+
+        return Response(
+            success_response(
+                message=(
+                    "Workspace team tasks grouped "
+                    "successfully"
+                ),
+                code=(
+                    "WORKSPACE_TEAM_TASKS_GROUPED_RETRIEVED"
+                ),
+                data=serializer.data,
+            ),
+            status=status.HTTP_200_OK,
+        )
+
+
+
+
+
+
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="deleted",
+    )
+    def deleted_tasks(self, request):
+        project_id = request.query_params.get("project_id")
+
+        queryset = Task.objects.filter(
+            is_deleted=True,
+        ).select_related(
+            "project",
+            "assigned_to",
+            "deleted_by",
+        )
+
+        if project_id:
+            queryset = queryset.filter(
+                project_id=project_id,
+            )
+
+        allowed_project_ids = ProjectRole.objects.filter(
+            user=request.user,
+            role__in=["ADMIN", "MANAGER"],
+        ).values_list(
+            "project_id",
+            flat=True,
+        )
+
+        queryset = queryset.filter(
+            Q(project__workspace__creator=request.user)
+            | Q(project_id__in=allowed_project_ids)
+        ).distinct().order_by("-deleted_at")
+
+        serializer = TaskSerializer(
+            queryset,
+            many=True,
+            context=self.get_serializer_context(),
+        )
+
+        return Response(
+            success_response(
+                message="Deleted tasks retrieved successfully",
+                code="DELETED_TASKS_RETRIEVED",
+                data=serializer.data,
+            ),
+            status=status.HTTP_200_OK,
+        )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 class ReviewTechnicalReportAPIView(APIView):
@@ -351,13 +535,130 @@ class TransferTaskToUser(APIView):
         if not ProjectRole.objects.filter(project=project, user=request.user, role__in=['ADMIN', 'MANAGER']).exists():
             raise PermissionDeniedError()
 
-        tasks = TaskTransferService.get_orphaned_tasks(project)
+        tasks = TaskTransferService.get_orphaned_tasks(project, request.query_params,)
         serializer = TaskSerializer(tasks, many=True, context={'request': request})
         return Response(success_response(
             message="Unassigned tasks retrieved successfully",
             code="UNASSIGNED_TASKS_RETRIEVED",
             data=serializer.data,
         ), status=status.HTTP_200_OK)
+
+
+
+
+
+
+class ArchiveTaskAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, task_id):
+        task = get_object_or_404(
+            Task.objects.select_related(
+                "project",
+                "project__workspace",
+            ),
+            id=task_id,
+        )
+
+        task = TaskService.archive_task(
+            task=task,
+            user=request.user,
+        )
+
+        return Response(
+            success_response(
+                message="Task archived successfully",
+                code="TASK_ARCHIVED",
+                data={
+                    "task_id": task.id,
+                    "is_archived": task.is_archived,
+                },
+            ),
+            status=status.HTTP_200_OK,
+        )
+class UnarchiveTaskAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, task_id):
+        task = get_object_or_404(
+            Task.objects.select_related(
+                "project",
+                "project__workspace",
+            ),
+            id=task_id,
+        )
+
+        task = TaskService.unarchive_task(
+            task=task,
+            user=request.user,
+        )
+
+        return Response(
+            success_response(
+                message="Task restored from archive successfully",
+                code="TASK_UNARCHIVED",
+                data={
+                    "task_id": task.id,
+                    "is_archived": task.is_archived,
+                },
+            ),
+            status=status.HTTP_200_OK,
+        )
+
+
+
+
+
+
+class TaskHistoryAPIView(APIView):
+    permission_classes = [
+        IsAuthenticated,
+    ]
+
+    def get(self, request, task_id):
+        task = get_object_or_404(
+            Task.objects.select_related(
+                "project",
+                "project__workspace",
+            ),
+            id=task_id,
+        )
+
+        history = (
+            TaskHistoryService
+            .get_task_history(
+                task=task,
+                user=request.user,
+            )
+        )
+
+        serializer = TaskHistorySerializer(
+            history,
+            many=True,
+            context={
+                "request": request,
+            },
+        )
+
+        return Response(
+            success_response(
+                message=(
+                    "Task history retrieved "
+                    "successfully"
+                ),
+                code="TASK_HISTORY_RETRIEVED",
+                data=serializer.data,
+            ),
+            status=status.HTTP_200_OK,
+        )
+
+
+
+
+
+
+
+
 
 
 

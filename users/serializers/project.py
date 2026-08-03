@@ -95,6 +95,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             or is_project_manager
         )
 
+
         return {
             "can_view": (
                 is_workspace_admin
@@ -112,9 +113,41 @@ class ProjectSerializer(serializers.ModelSerializer):
                 is_workspace_admin
                 or is_project_admin
                 or is_project_manager
+                or is_project_member
             ),
+            "can_view_team_tasks": (
+            is_workspace_admin
+            or is_project_admin
+            or is_project_manager),
+
             "can_update_member_role": can_manage_project,
             "can_remove_member": can_manage_project,
+
+            "can_view_unassigned_tasks": (
+                    is_workspace_admin
+                    or is_project_admin
+                    or is_project_manager
+                ),
+            "can_view_archived_tasks": (
+                is_workspace_admin
+                or is_project_admin
+                or is_project_manager
+            ),
+            "can_view_deleted_tasks": (
+                is_workspace_admin
+                or is_project_admin
+                or is_project_manager
+            ),
+            "can_restore_tasks": (
+                is_workspace_admin
+                or is_project_admin
+                or is_project_manager
+            ),
+            "can_assign_tasks": (
+                is_workspace_admin
+                or is_project_admin
+                or is_project_manager
+            ),
         }
 
 

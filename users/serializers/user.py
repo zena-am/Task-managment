@@ -55,6 +55,8 @@ class UserRegisterSerializer(serializers.ModelSerializer):
 
 
 
+
+
 class ProjectMemberDetailSerializer(serializers.ModelSerializer):
     can_delete = serializers.SerializerMethodField()
     role = serializers.SerializerMethodField()
@@ -126,7 +128,7 @@ class ProjectMemberDetailSerializer(serializers.ModelSerializer):
 
         if not request or not request.user.is_authenticated:
             return False
-        
+
 
         return (
             obj.project.workspace.creator_id

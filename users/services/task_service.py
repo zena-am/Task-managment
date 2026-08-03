@@ -164,6 +164,9 @@ class TaskService:
                 "updated_at",
             ]
         )
+        TaskService.refresh_project_status(
+            task.project,
+        )
 
         create_activity_log(
             user=user,
@@ -305,6 +308,9 @@ class TaskService:
                 reason="Task created",
                 is_by_admin=True,
             )
+            TaskService.refresh_project_status(
+                    project,
+                )
 
             return task
 
@@ -548,6 +554,11 @@ class TaskService:
         task.status = status_value
         task.save(update_fields=["status", "start_time", "end_time", "actual_duration", "updated_at"])
 
+
+        TaskService.refresh_project_status(
+            task.project,
+        )
+
         return task
 
 
@@ -623,6 +634,8 @@ class TaskService:
                 navigation_target=f"/report_details/{report.id}",
             )
 
+        TaskService.refresh_project_status(task.project,)
+
         task.save()
         ActivityLog.objects.create(
             user=manager_user,
@@ -689,6 +702,8 @@ class TaskService:
                 "updated_at",
             ]
         )
+        TaskService.refresh_project_status(
+            task.project,)
 
         return task
 
@@ -825,3 +840,142 @@ class TaskService:
 
         return dependency
 
+
+
+    @staticmethod
+    def refresh_project_status(project):
+        tasks = Task.objects.filter(
+            project=project,
+            is_deleted=False,
+        )
+
+        if not tasks.exists():
+            new_status = "pending"
+
+        elif tasks.exclude(status="DONE").exists():
+            new_status = "on_going"
+
+        else:
+            new_status = "completed"
+
+        if project.status != new_status:
+            project.status = new_status
+            project.save(
+                update_fields=[
+                    "status",
+                    "updated_at",
+                ]
+            )
+
+
+
+
+
+    @staticmethod
+    @transaction.atomic
+    def archive_task(*, task, user):
+        is_project_manager = ProjectRole.objects.filter(
+            project=task.project,
+            user=user,
+            role__in=["ADMIN", "MANAGER"],
+        ).exists()
+
+        is_workspace_owner = (
+            task.project.workspace.creator_id == user.id
+        )
+
+        if not (
+            is_project_manager
+            or is_workspace_owner
+        ):
+            raise PermissionDeniedError()
+
+        if task.is_deleted:
+            raise ValidationError({
+                "detail": "Deleted tasks cannot be archived.",
+                "code": "DELETED_TASK_CANNOT_BE_ARCHIVED",
+            })
+
+        if task.is_archived:
+            return task
+
+        task.is_archived = True
+
+        task.save(
+            update_fields=[
+                "is_archived",
+                "updated_at",
+            ]
+        )
+
+        TaskService.refresh_project_status(
+            task.project,
+        )
+
+        create_activity_log(
+            user=user,
+            action="TASK_ARCHIVED",
+            action_id=task.id,
+            subject_name=user.username,
+            target_title=task.title,
+            reason=f"Task '{task.title}' was archived.",
+            is_by_admin=True,
+        )
+
+        return task
+
+
+
+
+    @staticmethod
+    @transaction.atomic
+    def unarchive_task(*, task, user):
+        is_project_manager = ProjectRole.objects.filter(
+            project=task.project,
+            user=user,
+            role__in=["ADMIN", "MANAGER"],
+        ).exists()
+
+        is_workspace_owner = (
+            task.project.workspace.creator_id == user.id
+        )
+
+        if not (
+            is_project_manager
+            or is_workspace_owner
+        ):
+            raise PermissionDeniedError()
+
+        if task.is_deleted:
+            raise ValidationError({
+                "detail": "Deleted tasks cannot be restored from archive.",
+                "code": "DELETED_TASK_CANNOT_BE_UNARCHIVED",
+            })
+
+        if not task.is_archived:
+            return task
+
+        task.is_archived = False
+
+        task.save(
+            update_fields=[
+                "is_archived",
+                "updated_at",
+            ]
+        )
+
+        TaskService.refresh_project_status(
+            task.project,
+        )
+
+        create_activity_log(
+            user=user,
+            action="TASK_UNARCHIVED",
+            action_id=task.id,
+            subject_name=user.username,
+            target_title=task.title,
+            reason=f"Task '{task.title}' was restored from archive.",
+            is_by_admin=True,
+        )
+
+        return task
