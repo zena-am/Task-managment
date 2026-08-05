@@ -463,7 +463,7 @@ class TaskService:
                     raise InvalidStatusError()
         TASK_TRANSITIONS = {
             "TODO": ["INPROGRESS"],
-            "INPROGRESS": ["TODO", "REVIEW"],
+            "INPROGRESS": ["TODO", "REVIEW", "DONE"],
             "PAUSED": ["INPROGRESS", "DONE"],
             "REVIEW": [],
             "DONE": [],
