@@ -269,6 +269,27 @@ class TaskTransferService:
 
         return task
 
+    @staticmethod
+    def _can_manage_project(
+        *,
+        user,
+        project,
+    ):
+        is_workspace_owner = (
+            project.workspace.creator_id == user.id
+        )
+
+        is_project_manager = ProjectRole.objects.filter(
+            project=project,
+            user=user,
+            role__in=["ADMIN", "MANAGER"],
+        ).exists()
+
+        return (
+            is_workspace_owner
+            or is_project_manager
+        )
+
 class ProjectService:
 
     @staticmethod

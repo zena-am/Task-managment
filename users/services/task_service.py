@@ -464,6 +464,7 @@ class TaskService:
         TASK_TRANSITIONS = {
             "TODO": ["INPROGRESS"],
             "INPROGRESS": ["TODO", "REVIEW"],
+            "PAUSED": ["INPROGRESS", "DONE"],
             "REVIEW": [],
             "DONE": [],
 }
@@ -484,6 +485,11 @@ class TaskService:
         is_assignee = task.assigned_to_id == user.id
         if not is_assignee and not is_project_manager:
             raise PermissionDeniedError()
+
+        if status_value == "DONE":
+            if not (is_project_manager and is_assignee):
+                raise InvalidStatusError()
+
         if task.is_deleted or task.is_archived:
                 raise InvalidStatusError()
 
@@ -592,7 +598,18 @@ class TaskService:
         ).exists()
         if not is_project_manager:
             raise PermissionDeniedError()
-
+        if report.status != "SUBMITTED":
+                raise ValidationError({
+                    "status": (
+                        "Only submitted reports can be reviewed."
+                    )
+                })
+        if new_status == "APPROVED" and not quality:
+            raise ValidationError({
+                "quality": (
+                    "Quality evaluation is required."
+                )
+            })
         now = timezone.now()
 
         if feedback_text:
@@ -633,6 +650,17 @@ class TaskService:
                 message=f"Your report for task '{task.title}' needs adjustments.",
                 navigation_target=f"/report_details/{report.id}",
             )
+            create_activity_log(
+                user=manager_user,
+                action="REPORT_REJECTED",
+                action_id=report.id,
+                changes={
+                    "subject_name": manager_user.username,
+                    "target_title": task.title,
+                    "reason": feedback_text,
+                    "is_by_admin": True,
+                },
+)
 
         TaskService.refresh_project_status(task.project,)
 

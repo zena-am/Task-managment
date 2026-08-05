@@ -247,55 +247,36 @@ class TaskSerializer(serializers.ModelSerializer):
         return {
             "can_view": (
                 is_assigned
-                or is_manager
-                or is_owner
-                or is_viewer
+                or is_manager or is_owner or is_viewer
             ),
 
             "can_update": is_manager or is_owner,
-
+            "can_update_status":is_assigned,
             "can_delete": is_manager or is_owner,
-
             "can_assign": is_manager or is_owner,
-
             "can_create_task": is_manager or is_owner,
+            "can_submit_report": (is_employee and is_assigned and obj.status == "INPROGRESS"),
+            "can_view_reports": ( is_manager or is_owner or is_assigned),
+            "can_view_unassigned_tasks": (is_manager or is_owner),
+            "can_view_archived_tasks": (is_manager or is_owner),
 
-            "can_submit_report": (
+            "can_view_deleted_tasks": (is_manager or is_owner),
+            "can_restore_tasks": (is_manager or is_owner),
+            "can_assign_tasks": (is_manager or is_owner),
+            "can_manage_dependencies": (is_manager or is_owner),
+
+
+            "can_mark_done_directly":(is_manager
+                and is_assigned
+                and obj.status in [
+                    "INPROGRESS",
+                    "PAUSED",
+                ]),
+            "can_send_to_review": (
                 is_employee
                 and is_assigned
-                and obj.status == "INPROGRESS"
-            ),
+                and obj.status == "INPROGRESS"),
 
-
-            "can_view_reports": (
-                is_manager
-                or is_owner
-                or is_assigned
-            ),
-            "can_view_unassigned_tasks": (
-            is_manager
-            or is_owner
-        ),
-
-        "can_view_archived_tasks": (
-            is_manager
-            or is_owner
-        ),
-
-        "can_view_deleted_tasks": (
-            is_manager
-            or is_owner
-        ),
-
-        "can_restore_tasks": (
-            is_manager
-            or is_owner
-        ),
-
-        "can_assign_tasks": (
-            is_manager
-            or is_owner
-        ),
         }
 
     def get_state_label(self, obj):

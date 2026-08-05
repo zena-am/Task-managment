@@ -122,27 +122,6 @@ class ReportService:
             report.duration_time = duration
             task.actual_duration = duration
 
-        report.status = "SUBMITTED"
-        report.save(
-            update_fields=[
-                "status",
-                "duration_time",
-                "updated_at",
-            ]
-        )
-
-        task.status = "REVIEW"
-        task.save(
-            update_fields=[
-                "status",
-                "actual_duration",
-                "updated_at",
-            ]
-        )
-
-
-
-
 
 
 
@@ -175,13 +154,23 @@ class ReportService:
             raise ValidationError(
                 "Description is required before submitting the report."
             )
-
         report.status = "SUBMITTED"
-        report.save(update_fields=["status", "updated_at"])
+        report.save(
+                        update_fields=[
+                            "status",
+                            "duration_time",
+                            "updated_at",
+                        ]
+                    )
 
         task.status = "REVIEW"
-        task.save(update_fields=["status", "updated_at"])
-
+        task.save(
+                        update_fields=[
+                            "status",
+                            "actual_duration",
+                            "updated_at",
+                        ]
+                    )
         managers = ProjectRole.objects.filter(
             project=task.project,
             role__in=["ADMIN", "MANAGER"]
