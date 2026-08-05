@@ -153,8 +153,9 @@ class TaskTransferService:
             })
 
         if not TaskTransferService._can_manage_project(
-            project,
-            performed_by,
+
+            user=performed_by,
+            project=project,
         ):
             raise PermissionDeniedError()
 
