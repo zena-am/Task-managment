@@ -317,7 +317,7 @@ class BugReportSerializer(serializers.ModelSerializer):
             ),
             "can_close": (
                 is_manager
-                and obj.status == "VERIFIED"
+                and obj.status in ["OPEN", "FIXED", "VERIFIED"]
             ),
             "can_view_task": obj.task_id is not None,
         }
