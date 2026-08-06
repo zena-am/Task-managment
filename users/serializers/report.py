@@ -225,6 +225,10 @@ class ResolveLeaveTaskActionSerializer(serializers.Serializer):
 
 class BugLinkedTaskSerializer(serializers.ModelSerializer):
     assigned_to_name = serializers.SerializerMethodField()
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
 
     class Meta:
         model = Task
