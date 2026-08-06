@@ -9,6 +9,7 @@ from users.models import (
     Task,
     User,
 )
+from users.services import UserAvailabilityService
 
 
 class BugReportService:
@@ -196,23 +197,13 @@ class BugReportService:
         )
 
         if bug.status != "OPEN":
-            raise ValidationError(
-                "Only open bug reports can be converted to tasks."
-            )
-
-        active_task_exists = BugTaskLink.objects.filter(
-            bug=bug,
-            task__status__in=[
-                "TODO",
-                "INPROGRESS",
-                "REVIEW",
-                "PAUSED",
-            ],
-            task__is_deleted=False,
-            task__is_archived=False,
-        ).exists()
-
-
+            raise ValidationError({
+                "detail": (
+                    "Only open bug reports can be converted "
+                    "to tasks."
+                ),
+                "code": "BUG_NOT_OPEN",
+            })
 
         if assigned_to:
             is_member = ProjectRole.objects.filter(
@@ -227,6 +218,11 @@ class BugReportService:
                         "of this project."
                     )
                 })
+
+            UserAvailabilityService.ensure_active(
+                assigned_to,
+                action="task assignment",
+            )
 
         task = Task.objects.create(
             creator=manager,
@@ -247,6 +243,12 @@ class BugReportService:
             link=bug.url,
         )
 
+        BugTaskLink.objects.create(
+            bug=bug,
+            task=task,
+            created_by=manager,
+        )
+
         bug.task = task
         bug.save(
             update_fields=[
@@ -254,19 +256,6 @@ class BugReportService:
                 "updated_at",
             ]
         )
-        BugTaskLink.objects.create(
-                        bug=bug,
-                        task=task,
-                        created_by=manager,
-                    )
-
-        bug.task = task
-        bug.save(
-                        update_fields=[
-                            "task",
-                            "updated_at",
-                        ]
-                    )
 
         if assigned_to:
             create_notification(
@@ -280,23 +269,27 @@ class BugReportService:
                 navigation_target=f"/tasks/{task.id}",
             )
 
-        create_notification(
-            recipient=bug.user,
-            notification_type="BUG_CONVERTED_TO_TASK",
-            title="Bug accepted",
-            message=(
-                f"Your bug report '{bug.title}' "
-                f"was converted into a task."
-            ),
-            navigation_target=f"/tasks/{task.id}",
-        )
+        if bug.user_id != manager.id:
+            create_notification(
+                recipient=bug.user,
+                notification_type="BUG_CONVERTED_TO_TASK",
+                title="Bug accepted",
+                message=(
+                    f"Your bug report '{bug.title}' "
+                    f"was converted into task #{task.id}."
+                ),
+                navigation_target=f"/tasks/{task.id}",
+            )
 
         create_activity_log(
             user=manager,
             action="BUG_CONVERTED_TO_TASK",
             action_id=bug.id,
             changes={
-                "subject_name": manager.username,
+                "subject_name": (
+                    manager.get_full_name()
+                    or manager.username
+                ),
                 "target_title": bug.title,
                 "reason": (
                     f"Bug report '{bug.title}' was converted "
@@ -307,29 +300,64 @@ class BugReportService:
         )
 
         return task
-
     @staticmethod
     @transaction.atomic
-    def verify_fix(bug, user):
+    def verify_fix(
+        bug,
+        user,
+    ):
         if bug.user_id != user.id:
             raise PermissionDenied(
                 "Only the bug reporter can verify the fix."
             )
 
-        if not bug.task:
-            raise ValidationError(
-                "This bug report is not linked to a task."
-            )
+        linked_tasks = BugTaskLink.objects.filter(
+            bug=bug,
+            task__is_deleted=False,
+            task__is_archived=False,
+        ).select_related(
+            "task",
+        )
 
-        if bug.task.status != "DONE":
-            raise ValidationError(
-                "The linked task must be completed first."
-            )
+        if not linked_tasks.exists():
+            raise ValidationError({
+                "detail": (
+                    "This bug report is not linked "
+                    "to any active task."
+                ),
+                "code": "BUG_HAS_NO_LINKED_TASKS",
+            })
+
+        unfinished_tasks = linked_tasks.exclude(
+            task__status="DONE",
+        )
+
+        if unfinished_tasks.exists():
+            raise ValidationError({
+                "detail": (
+                    "All linked tasks must be completed "
+                    "before verifying the fix."
+                ),
+                "code": "BUG_HAS_UNFINISHED_TASKS",
+                "tasks": [
+                    {
+                        "id": link.task_id,
+                        "title": link.task.title,
+                        "status": link.task.status,
+                    }
+                    for link in unfinished_tasks
+                ],
+            })
 
         if bug.status not in ["OPEN", "FIXED"]:
-            raise ValidationError(
-                "This bug cannot be verified in its current state."
-            )
+            raise ValidationError({
+                "detail": (
+                    "This bug cannot be verified "
+                    "in its current state."
+                ),
+                "code": "BUG_CANNOT_BE_VERIFIED",
+                "bug_status": bug.status,
+            })
 
         bug.status = "VERIFIED"
         bug.save(
@@ -337,6 +365,24 @@ class BugReportService:
                 "status",
                 "updated_at",
             ]
+        )
+
+        create_activity_log(
+            user=user,
+            action="BUG_VERIFIED",
+            action_id=bug.id,
+            changes={
+                "subject_name": (
+                    user.get_full_name()
+                    or user.username
+                ),
+                "target_title": bug.title,
+                "reason": (
+                    f"The fix for bug '{bug.title}' "
+                    "was verified by the reporter."
+                ),
+                "is_by_admin": False,
+            },
         )
 
         return bug
