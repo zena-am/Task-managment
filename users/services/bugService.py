@@ -212,19 +212,7 @@ class BugReportService:
             task__is_archived=False,
         ).exists()
 
-        BugTaskLink.objects.create(
-                bug=bug,
-                task=task,
-                created_by=manager,
-            )
 
-        bug.task = task
-        bug.save(
-                update_fields=[
-                    "task",
-                    "updated_at",
-                ]
-            )
 
         if assigned_to:
             is_member = ProjectRole.objects.filter(
@@ -266,6 +254,19 @@ class BugReportService:
                 "updated_at",
             ]
         )
+        BugTaskLink.objects.create(
+                        bug=bug,
+                        task=task,
+                        created_by=manager,
+                    )
+
+        bug.task = task
+        bug.save(
+                        update_fields=[
+                            "task",
+                            "updated_at",
+                        ]
+                    )
 
         if assigned_to:
             create_notification(
