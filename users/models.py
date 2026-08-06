@@ -560,7 +560,33 @@ class BugReportForm(TimeStampedModel):
                 ordering = ['-created_at']
 
 
+class BugTaskLink(TimeStampedModel):
+        bug = models.ForeignKey(
+                BugReportForm,
+                on_delete=models.CASCADE,
+                related_name="task_links",
+        )
 
+        task = models.OneToOneField(
+                Task,
+                on_delete=models.CASCADE,
+                related_name="bug_link",
+        )
+
+        created_by = models.ForeignKey(
+                settings.AUTH_USER_MODEL,
+                on_delete=models.SET_NULL,
+                null=True,
+                related_name="created_bug_task_links",
+        )
+
+        class Meta:
+                constraints = [
+                models.UniqueConstraint(
+                        fields=["bug", "task"],
+                        name="unique_bug_task_link",
+                )
+                ]
 
 class Invitation(TimeStampedModel):
         ROLE_CHOICES = [

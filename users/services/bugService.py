@@ -4,6 +4,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from users.constants import create_activity_log, create_notification
 from users.models import (
     BugReportForm,
+    BugTaskLink,
     ProjectRole,
     Task,
     User,
@@ -199,9 +200,30 @@ class BugReportService:
                 "Only open bug reports can be converted to tasks."
             )
 
-        if bug.task_id is not None:
-            raise ValidationError(
-                "This bug report already has a linked task."
+        active_task_exists = BugTaskLink.objects.filter(
+            bug=bug,
+            task__status__in=[
+                "TODO",
+                "INPROGRESS",
+                "REVIEW",
+                "PAUSED",
+            ],
+            task__is_deleted=False,
+            task__is_archived=False,
+        ).exists()
+
+        BugTaskLink.objects.create(
+                bug=bug,
+                task=task,
+                created_by=manager,
+            )
+
+        bug.task = task
+        bug.save(
+                update_fields=[
+                    "task",
+                    "updated_at",
+                ]
             )
 
         if assigned_to:
@@ -334,6 +356,62 @@ class BugReportService:
             raise ValidationError({
             "result": "Closing reason is required."
         })
+        if (
+            bug.task_id
+            and bug.task.status != "DONE"
+        ):
+            raise ValidationError({
+                "task": (
+                    "This bug is linked to an active task. "
+                    "Choose whether to keep or archive the task "
+                    "before closing the bug."
+                ),
+                "code": "BUG_HAS_ACTIVE_TASK",
+                "task_id": bug.task_id,
+                "task_status": bug.task.status,
+            })
+        active_tasks = BugTaskLink.objects.filter(
+                bug=bug,
+                task__status__in=[
+                    "TODO",
+                    "INPROGRESS",
+                    "REVIEW",
+                    "PAUSED",
+                ],
+                task__is_deleted=False,
+                task__is_archived=False,
+            ).select_related(
+                "task",
+            )
+
+        if active_tasks.exists():
+            raise ValidationError({
+                "detail": (
+                    "The bug cannot be closed while it has "
+                    "active linked tasks."
+                ),
+                "code": "BUG_HAS_ACTIVE_TASKS",
+                "tasks": [
+                    {
+                        "id": link.task_id,
+                        "title": link.task.title,
+                        "status": link.task.status,
+                    }
+                    for link in active_tasks
+                ],
+            })
+        has_linked_tasks = BugTaskLink.objects.filter(
+            bug=bug,
+        ).exists()
+
+        if has_linked_tasks and bug.status != "VERIFIED":
+            raise ValidationError({
+                "detail": (
+                    "The bug reporter must verify the fix "
+                    "before closing the bug."
+                ),
+                "code": "BUG_FIX_NOT_VERIFIED",
+            })
 
         bug.status = "CLOSED"
 

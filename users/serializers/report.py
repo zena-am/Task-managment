@@ -223,9 +223,33 @@ class ResolveLeaveTaskActionSerializer(serializers.Serializer):
 
 
 
+class BugLinkedTaskSerializer(serializers.ModelSerializer):
+    assigned_to_name = serializers.SerializerMethodField()
 
+    class Meta:
+        model = Task
+        fields = [
+            "id",
+            "title",
+            "status",
+            "status_display",
+            "priority",
+            "due_date",
+            "assigned_to",
+            "assigned_to_name",
+        ]
+
+    def get_assigned_to_name(self, obj):
+        if not obj.assigned_to:
+            return None
+
+        return (
+            obj.assigned_to.get_full_name()
+            or obj.assigned_to.username
+        )
 
 class BugReportSerializer(serializers.ModelSerializer):
+    linked_tasks = serializers.SerializerMethodField()
     reporter_name = serializers.CharField(
         source="user.username",
         read_only=True,
@@ -247,6 +271,7 @@ class BugReportSerializer(serializers.ModelSerializer):
     class Meta:
         model = BugReportForm
         fields = [
+            'linked_tasks',
             "id",
             "project",
             "project_name",
@@ -293,6 +318,16 @@ class BugReportSerializer(serializers.ModelSerializer):
         ).exists()
         or obj.project.workspace.creator_id == user.id
 )
+        has_active_task = obj.task_links.filter(
+            task__status__in=[
+                "TODO",
+                "INPROGRESS",
+                "REVIEW",
+                "PAUSED",
+            ],
+            task__is_deleted=False,
+            task__is_archived=False,
+        ).exists()
         return {
             "can_edit": (
                 is_reporter
@@ -307,7 +342,7 @@ class BugReportSerializer(serializers.ModelSerializer):
             "can_convert_to_task": (
                 is_manager
                 and obj.status == "OPEN"
-                and obj.task_id is None
+                and not has_active_task
             ),
             "can_verify": (
                 is_reporter
@@ -321,6 +356,21 @@ class BugReportSerializer(serializers.ModelSerializer):
             ),
             "can_view_task": obj.task_id is not None,
         }
+    def get_linked_tasks(self, obj):
+        tasks = Task.objects.filter(
+            bug_link__bug=obj,
+        ).select_related(
+            "assigned_to",
+        ).order_by(
+            "-created_at",
+        )
+
+        return BugLinkedTaskSerializer(
+            tasks,
+            many=True,
+            context=self.context,
+        ).data
+
 class ManagerRequestReviewSerializer(serializers.ModelSerializer):
     status = serializers.ChoiceField(
         choices=["APPROVED", "REJECTED"]
@@ -356,6 +406,7 @@ class BugToTaskSerializer(serializers.Serializer):
         choices=Task.PRIORITY_CHOICES,
         required=False,
     )
+
 
     def validate(self, attrs):
         bug = self.context["bug"]

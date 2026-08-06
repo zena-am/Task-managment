@@ -825,6 +825,41 @@ class TaskService:
                 "code": "CROSS_PROJECT_DEPENDENCY",
             })
 
+        if dependency_type not in dict(
+            TaskDependency.DEPENDENCY_TYPES
+        ):
+            raise ValidationError({
+                "dependency_type": (
+                    "Invalid dependency type."
+                ),
+                "code": "INVALID_DEPENDENCY_TYPE",
+            })
+
+        if (
+            dependency_type == "BLOCKS"
+            and predecessor.due_date
+            and task.due_date
+            and predecessor.due_date > task.due_date
+        ):
+            raise ValidationError({
+                "detail": (
+                    "The predecessor task due date must be "
+                    "earlier than or equal to the dependent task due date."
+                ),
+                "code": "INVALID_DEPENDENCY_DATES",
+                "predecessor": {
+                    "id": predecessor.id,
+                    "title": predecessor.title,
+                    "due_date": predecessor.due_date,
+                },
+                "successor": {
+                    "id": task.id,
+                    "title": task.title,
+                    "due_date": task.due_date,
+                },
+            })
+
+
         if TaskDependency.objects.filter(
             predecessor=predecessor,
             successor=task,
