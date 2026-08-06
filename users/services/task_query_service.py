@@ -86,7 +86,8 @@ class TaskQueryService:
             tasks = tasks.order_by("-id")
             tasks_count = tasks.count()
             total_tasks += tasks_count
-
+            if tasks_count == 0:
+                continue
             result.append({
                 "project": project,
                 "tasks": tasks,
@@ -98,6 +99,120 @@ class TaskQueryService:
             "projects": result,
             "total_tasks": total_tasks,
         }
+
+
+    @staticmethod
+    def get_project_team_tasks_grouped(
+        *,
+        user,
+        project_id,
+        params=None,
+    ):
+        params = params or {}
+
+        project = Project.objects.select_related(
+            "workspace",
+        ).filter(
+            id=project_id,
+        ).first()
+
+        if not project:
+            raise ValidationError({
+                "project": "Project not found."
+            })
+
+        requester_role = ProjectRole.objects.filter(
+            project=project,
+            user=user,
+        ).values_list(
+            "role",
+            flat=True,
+        ).first()
+
+        is_workspace_owner = (
+            project.workspace.creator_id == user.id
+        )
+
+        if (
+            not is_workspace_owner
+            and requester_role not in ["ADMIN", "MANAGER"]
+        ):
+            raise PermissionDeniedError()
+
+        project_memberships = (
+            ProjectRole.objects
+            .filter(
+                project=project,
+                user__is_deleted=False,
+            )
+            .select_related("user")
+            .order_by("user__username")
+        )
+
+        result_members = []
+        total_tasks = 0
+
+        for membership in project_memberships:
+            member = membership.user
+
+            tasks = (
+                Task.objects
+                .filter(
+                    project=project,
+                    assigned_to=member,
+                    is_deleted=False,
+                )
+                .select_related(
+                    "project",
+                    "assigned_to",
+                )
+            )
+
+            tasks = TaskQueryService.filter_by_status(
+                tasks,
+                params.get("status"),
+            )
+
+            tasks = TaskQueryService.filter_by_priority(
+                tasks,
+                params.get("priority"),
+            )
+
+            tasks = TaskQueryService.filter_by_deadline(
+                tasks,
+                params.get("deadline"),
+            )
+
+            tasks = TaskQueryService.filter_by_archived(
+                tasks,
+                params.get("archived"),
+            )
+
+            tasks = tasks.order_by("-id")
+            tasks_count = tasks.count()
+
+            if tasks_count == 0:
+                continue
+
+            total_tasks += tasks_count
+
+            result_members.append({
+                "member": member,
+                "project_role": membership.role,
+                "tasks_count": tasks_count,
+                "tasks": tasks,
+            })
+
+        return {
+            "project_id": project.id,
+            "project_name": project.name,
+            "total_members": len(result_members),
+            "total_tasks": total_tasks,
+            "members": result_members,
+        }
+
+
+
     @staticmethod
     def get_tasks(
         user,

@@ -737,3 +737,65 @@ class WorkspaceTeamTasksGroupedSerializer(
     members = WorkspaceTeamMemberSerializer(
         many=True,
     )
+
+
+
+class ProjectTeamMemberTasksSerializer(
+    serializers.Serializer
+):
+    id = serializers.IntegerField(
+        source="member.id",
+    )
+
+    username = serializers.CharField(
+        source="member.username",
+    )
+
+    first_name = serializers.CharField(
+        source="member.first_name",
+    )
+
+    last_name = serializers.CharField(
+        source="member.last_name",
+    )
+
+    avatar = serializers.SerializerMethodField()
+
+    project_role = serializers.CharField()
+
+    tasks_count = serializers.IntegerField()
+
+    tasks = TaskSerializer(
+        many=True,
+        read_only=True,
+    )
+
+    def get_avatar(self, obj):
+        member = obj["member"]
+
+        if not member.avatar:
+            return None
+
+        request = self.context.get("request")
+        url = member.avatar.url
+
+        if request:
+            return request.build_absolute_uri(url)
+
+        return url
+
+
+class ProjectTeamTasksGroupedSerializer(
+    serializers.Serializer
+):
+    project_id = serializers.IntegerField()
+
+    project_name = serializers.CharField()
+
+    total_members = serializers.IntegerField()
+
+    total_tasks = serializers.IntegerField()
+
+    members = ProjectTeamMemberTasksSerializer(
+        many=True,
+    )

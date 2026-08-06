@@ -15,7 +15,7 @@ from users.errors.messages.success import success_response
 from users.models import Project, ProjectRole, Task, TechnicalReportForm
 from users.permissions import CanUpdateTaskStatus, IsTeamManager, IsTeamManagerForProject, TaskPermission
 from users.serializers import TaskCreateUpdateSerializer, TaskSerializer, ManagerReportReviewSerializer
-from users.serializers.task import ProjectWithoutManagerSerializer, TaskHistorySerializer, TechnicalReportDetailSerializer, UserWorkspaceTasksGroupedSerializer, WorkspaceTeamTasksGroupedSerializer
+from users.serializers.task import ProjectTeamTasksGroupedSerializer, ProjectWithoutManagerSerializer, TaskHistorySerializer, TechnicalReportDetailSerializer, UserWorkspaceTasksGroupedSerializer, WorkspaceTeamTasksGroupedSerializer
 from users.services.taskHistory import TaskHistoryService
 from users.services.task_query_service import ProjectTaskCart, TaskCart, TaskQueryService
 from users.services.task_service import TaskService
@@ -231,41 +231,81 @@ class TaskView(viewsets.ModelViewSet):
             r"(?P<workspace_id>\d+)/grouped"
         ),
     )
+    @action(
+    detail=False,
+    methods=["get"],
+    url_path=(
+        r"team/project/"
+        r"(?P<project_id>\d+)/grouped"
+    ),
+)
+    def project_team_tasks_grouped(
+        self,
+        request,
+        project_id=None,
+    ):
+        result = (
+            TaskQueryService
+            .get_project_team_tasks_grouped(
+                user=request.user,
+                project_id=project_id,
+                params=request.query_params,
+            )
+        )
+
+        serializer = ProjectTeamTasksGroupedSerializer(
+            result,
+            context=self.get_serializer_context(),
+        )
+
+        return Response(
+            success_response(
+                message=(
+                    "Project team tasks grouped "
+                    "successfully"
+                ),
+                code=(
+                    "PROJECT_TEAM_TASKS_GROUPED_RETRIEVED"
+                ),
+                data=serializer.data,
+            ),
+            status=status.HTTP_200_OK,
+        )
 
     def user_workspace_tasks_grouped(
         self,
         request,
         workspace_id=None,
     ):
-        result = (
-            TaskQueryService
-            .get_user_workspace_tasks_grouped(
-                user=request.user,
-                workspace_id=workspace_id,
-                params=request.query_params,
+            result = (
+                TaskQueryService
+                .get_user_workspace_tasks_grouped(
+                    user=request.user,
+                    workspace_id=workspace_id,
+                    params=request.query_params,
+                )
             )
-        )
 
-        serializer = (
-            UserWorkspaceTasksGroupedSerializer(
-                result,
-                context=self.get_serializer_context(),
+            serializer = (
+                UserWorkspaceTasksGroupedSerializer(
+                    result,
+                    context=self.get_serializer_context(),
+                )
             )
-        )
 
-        return Response(
-            success_response(
-                message=(
-                    "Workspace tasks grouped by project "
-                    "retrieved successfully"
+            return Response(
+                success_response(
+                    message=(
+                        "Workspace tasks grouped by project "
+                        "retrieved successfully"
+                    ),
+                    code=(
+                        "WORKSPACE_TASKS_GROUPED_RETRIEVED"
+                    ),
+                    data=serializer.data,
                 ),
-                code=(
-                    "WORKSPACE_TASKS_GROUPED_RETRIEVED"
-                ),
-                data=serializer.data,
-            ),
-            status=status.HTTP_200_OK,
-        )
+                status=status.HTTP_200_OK,
+            )
 
     @action(
         detail=False,
