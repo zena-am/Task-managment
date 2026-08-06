@@ -20,7 +20,7 @@ from django.db.models import Q
 from drf_spectacular.utils import (extend_schema,extend_schema_view,OpenApiExample,OpenApiResponse)
 from drf_spectacular.types import OpenApiTypes
 from users.services.leave_service import LeaveRequestService
-
+from users.serializers.report import BugToTaskSerializer
 @extend_schema_view(
 
     list=extend_schema(

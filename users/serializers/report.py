@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from users.views.tasks import User
-from ..models import LeaveTaskAction, ProjectRole, TechnicalReportForm, RequestForm, BugReportForm
+from ..models import LeaveTaskAction, ProjectRole, Task, TechnicalReportForm, RequestForm, BugReportForm
 
 class TechnicalReportSerializer(serializers.ModelSerializer):
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
@@ -338,3 +338,41 @@ class ManagerRequestReviewSerializer(serializers.ModelSerializer):
             "status",
             "manager_feedback",
         ]
+class BugToTaskSerializer(serializers.Serializer):
+    assigned_to = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(
+            is_active=True,
+            is_deleted=False,
+        ),
+        required=False,
+        allow_null=True,
+    )
+
+    expected_duration = serializers.DurationField()
+
+    due_date = serializers.DateTimeField()
+
+    priority = serializers.ChoiceField(
+        choices=Task.PRIORITY_CHOICES,
+        required=False,
+    )
+
+    def validate(self, attrs):
+        bug = self.context["bug"]
+        assigned_to = attrs.get("assigned_to")
+
+        if assigned_to:
+            is_member = ProjectRole.objects.filter(
+                project=bug.project,
+                user=assigned_to,
+            ).exists()
+
+            if not is_member:
+                raise serializers.ValidationError({
+                    "assigned_to": (
+                        "The selected user is not a member "
+                        "of this project."
+                    )
+                })
+
+        return attrs
