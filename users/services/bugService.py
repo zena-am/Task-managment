@@ -326,10 +326,14 @@ class BugReportService:
             bug.project,
         )
 
-        if bug.status != "VERIFIED":
-            raise ValidationError(
-                "Only verified bugs can be closed."
-            )
+        if bug.status == "CLOSED":
+            raise ValidationError({
+            "status": "This bug report is already closed."
+        })
+        if not result:
+            raise ValidationError({
+            "result": "Closing reason is required."
+        })
 
         bug.status = "CLOSED"
 
