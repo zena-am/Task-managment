@@ -64,6 +64,11 @@ urlpatterns = [
         ArchiveTaskAPIView.as_view(),
     ),
     path(
+    "projects-without-manager/",
+    TransferSystemBot.as_view(),
+    name="projects-without-manager",
+),
+    path(
     "api/tasks/<int:task_id>/history/",
     TaskHistoryAPIView.as_view(),
     name="task-history",
