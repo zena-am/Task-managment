@@ -9,7 +9,7 @@ from users.errors.exceptions import (
     TaskAlreadyAssigned,
     TechnicalReportMissingError,
 )
-from users.models import ActivityLog, Notification, ProjectRole, RequestForm, Task, TaskDependency, TechnicalReportForm, User
+from users.models import ActivityLog, Notification, ProjectRole, RequestForm, Task, TaskDependency, TaskFile, TaskImage, TechnicalReportForm, User
 from users.services import UserAvailabilityService
 from users.services.invitationsService import InvitationService
 
@@ -241,6 +241,8 @@ class TaskService:
                 "dependency_ids",
                 [],
             )
+            image_files = validated_data.pop("image_files",[],)
+            document_files = validated_data.pop("document_files", [],)
 
             assigned_user = validated_data.get("assigned_to")
             project = validated_data.get("project")
@@ -273,12 +275,25 @@ class TaskService:
                     else "UNASSIGNED_NEW"
                 ),
                 **validated_data,)
+            for image in image_files:
+                TaskImage.objects.create(
+                    task=task,
+                    user=user,
+                    image=image,
+                )
 
+            for file in document_files:
+                TaskFile.objects.create(
+                    task=task,
+                    user=user,
+                    file=file,
+                )
             TaskService.create_dependencies(
                 task=task,
                 dependency_tasks=dependency_tasks,
                 created_by=user,
             )
+
 
 
             if assigned_user is not None:

@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema, extend_schema_view
@@ -15,6 +17,7 @@ from users.errors.exceptions import (
 from users.errors.messages.success import success_response
 from users.models import Project, WorkSpace, WorkSpaceMember, ProjectRole, Task
 from users.constants import create_activity_log
+from users.serializers import user
 from users.services.task_transfer_service import RoleService
 from ..permissions import IsTeamManagerForProject, IsWorkspaceOwner
 from ..serializers import ProjectMemberDetailSerializer, WorkSpaceMemberDetailSerializer
@@ -144,11 +147,49 @@ class ProjectMemberViewSet(viewsets.ModelViewSet):
                 raise OnlyOneWorkspaceAdminError()
 
         with transaction.atomic():
-            Task.objects.filter(project_id=project_id, assigned_to_id=member_id).update(
-                assigned_to=None,
-                assignment_state="UNASSIGNED_RETURNED",
-                status="TODO",
-            )
+
+            tasks= Task.objects.filter(
+                    project_id=project_id,
+                    assigned_to_id=member_id,
+                    is_deleted=False,
+                ).exclude(
+                    status="DONE",
+                )
+
+
+
+            for task in tasks:
+                create_activity_log(
+                    user=request.user,
+                    action="TASK_UNASSIGNED",
+                    action_id=task.id,
+                    changes={
+                        "subject_name": (
+                            member.get_full_name()
+                            or member.username
+                        ),
+                        "target_title": task.title,
+                        "previous_assignee_id": member.id,
+                        "previous_assignee_name": (
+                            member.get_full_name()
+                            or member.username
+                        ),
+                        "reason": (
+                            "Task was returned to the unassigned "
+                            "queue because the member was removed."
+                        ),
+                        "is_by_admin": True,
+                    },
+                )
+
+            tasks.update(
+                    assigned_to=None,
+                    assignment_state="UNASSIGNED_RETURNED",
+                    status="TODO",
+                    start_time=None,
+                    end_time=None,
+                    actual_duration=timedelta(0),
+                )
             removed_user_id = member.user_id
             member.delete()
 
@@ -284,11 +325,48 @@ class WorkSpaceMemberViewSet(viewsets.ModelViewSet):
 
         with transaction.atomic():
             ProjectRole.objects.filter(project__workspace_id=workspace_id, user_id=user_id).delete()
-            Task.objects.filter(project__workspace_id=workspace_id, assigned_to_id=user_id).update(
-                assigned_to=None,
-    assignment_state="UNASSIGNED_RETURNED",
-    status="TODO",
-            )
+            tasks=Task.objects.filter(
+                        project__workspace_id=workspace_id,
+                        assigned_to_id=user_id,
+                        is_deleted=False,
+                    ).exclude(
+                        status="DONE",
+                    )
+
+            for task in tasks:
+                create_activity_log(
+                    user=request.user,
+                    action="TASK_UNASSIGNED",
+                    action_id=task.id,
+                    changes={
+                        "subject_name": (
+                            user.get_full_name()
+                            or user.username
+                        ),
+                        "target_title": task.title,
+                        "previous_assignee_id": user.id,
+                        "previous_assignee_name": (
+                            user.get_full_name()
+                            or user.username
+                        ),
+                        "reason": (
+                            "Task was returned to the unassigned "
+                            "queue because the member was removed "
+                            "from the workspace."
+                        ),
+                        "is_by_admin": True,
+                    },
+                )
+
+
+            tasks.update(
+                        assigned_to=None,
+                        assignment_state="UNASSIGNED_RETURNED",
+                        status="TODO",
+                        start_time=None,
+                        end_time=None,
+                        actual_duration=timedelta(0),
+                    )
             WorkSpaceMember.objects.filter(workspace_id=workspace_id, user_id=user_id).delete()
 
         create_activity_log(user=request.user, action="MEMBER_REMOVED", action_id=int(user_id), changes={"workspace_id": int(workspace_id), "reason": "Workspace member removed"})
