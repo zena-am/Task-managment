@@ -1,8 +1,31 @@
 from datetime import timedelta
+import os
 from django.utils import timezone
 from rest_framework import serializers
 from users.serializers.user import UserSerializer
 from ..models import Project, ProjectRole, Task, TaskDependency,TaskImage,TaskFile, TechnicalReportForm, User
+MAX_IMAGE_SIZE = 5 * 1024 * 1024
+MAX_DOCUMENT_SIZE = 10 * 1024 * 1024
+
+ALLOWED_IMAGE_EXTENSIONS = {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".webp",
+        }
+
+ALLOWED_DOCUMENT_EXTENSIONS = {
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".ppt",
+            ".pptx",
+            ".txt",
+            ".csv",
+            ".zip",
+        }
 
 
 class TaskImageSerializer(serializers.ModelSerializer):
@@ -415,17 +438,73 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
         required=False,
         write_only=True,
     )
+    image_files = serializers.ListField(child=serializers.ImageField(), write_only=True, required=False)
+    document_files = serializers.ListField(child=serializers.FileField(), write_only=True, required=False)
+    remove_image_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), write_only=True, required=False)
+    remove_file_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), write_only=True, required=False)
+
 
     class Meta:
         model = Task
         fields = [
             'id', 'project', 'title', 'description', 'priority', 'status','dependency_ids',
             'expected_duration', 'link', 'assigned_to', 'image_files',
-            'document_files', 'due_date'
+            'document_files', 'due_date','image_files',
+            'document_files', 'remove_image_ids', 'remove_file_ids',
         ]
         read_only_fields = ['id']
 
 
+    def validate_image_files(self, files):
+        if len(files) > 5:
+            raise serializers.ValidationError(
+                "You can upload a maximum of 5 images."
+            )
+
+        for image in files:
+            extension = os.path.splitext(
+                image.name
+            )[1].lower()
+
+            if extension not in ALLOWED_IMAGE_EXTENSIONS:
+                raise serializers.ValidationError(
+                    f"Unsupported image type: {extension}"
+                )
+
+            if image.size > MAX_IMAGE_SIZE:
+                raise serializers.ValidationError(
+                    (
+                        f"Image '{image.name}' exceeds "
+                        "the maximum size of 5 MB."
+                    )
+                )
+
+        return files
+    def validate_document_files(self, files):
+        if len(files) > 5:
+            raise serializers.ValidationError(
+                "You can upload a maximum of 5 files."
+            )
+
+        for document in files:
+            extension = os.path.splitext(
+                document.name
+            )[1].lower()
+
+            if extension not in ALLOWED_DOCUMENT_EXTENSIONS:
+                raise serializers.ValidationError(
+                    f"Unsupported file type: {extension}"
+                )
+
+            if document.size > MAX_DOCUMENT_SIZE:
+                raise serializers.ValidationError(
+                    (
+                        f"File '{document.name}' exceeds "
+                        "the maximum size of 10 MB."
+                    )
+                )
+
+        return files
     def validate(self, attrs):
         project = attrs.get("project")
         parent = attrs.get("parent")
@@ -480,6 +559,9 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
         dependencies = validated_data.pop("dependency_ids", [])
         request = self.context.get('request')
 
+        remove_image_ids = validated_data.pop('remove_image_ids', [])
+        remove_file_ids = validated_data.pop('remove_file_ids', [])
+
         task = Task.objects.create(**validated_data)
         for dependency_task in dependencies:
             TaskDependency.objects.create(
@@ -499,6 +581,9 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         image_files = validated_data.pop('image_files', [])
         document_files = validated_data.pop('document_files', [])
+
+        remove_image_ids = validated_data.pop('remove_image_ids', [])
+        remove_file_ids = validated_data.pop('remove_file_ids', [])
         request = self.context.get('request')
 
         for attr, value in validated_data.items():

@@ -243,7 +243,15 @@ class TaskService:
             )
             image_files = validated_data.pop("image_files",[],)
             document_files = validated_data.pop("document_files", [],)
+            validated_data.pop(
+                "remove_image_ids",
+                [],
+            )
 
+            validated_data.pop(
+                "remove_file_ids",
+                [],
+            )
             assigned_user = validated_data.get("assigned_to")
             project = validated_data.get("project")
             due_date = validated_data.get("due_date")
