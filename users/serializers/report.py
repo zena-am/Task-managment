@@ -1,3 +1,7 @@
+import os
+
+import os
+
 from rest_framework import serializers
 
 from users.views.tasks import User
@@ -420,6 +424,20 @@ class ManagerRequestReviewSerializer(serializers.ModelSerializer):
             "manager_feedback",
         ]
 class BugToTaskSerializer(serializers.Serializer):
+    title = serializers.CharField(
+        required=False,
+        max_length=200,
+    )
+    description = serializers.CharField(
+        required=False,
+    )
+    link = serializers.URLField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=500,
+    )
+
     assigned_to = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.filter(
             is_active=True,
@@ -431,17 +449,109 @@ class BugToTaskSerializer(serializers.Serializer):
 
     expected_duration = serializers.DurationField()
 
-    due_date = serializers.DateTimeField()
+    due_date = serializers.DateTimeField(
+        input_formats=[
+            "%d-%m-%Y",
+            "%d/%m/%Y",
+            "%Y-%m-%d",
+            "%Y-%m-%dT%H:%M:%S%z",
+            "iso-8601",
+        ],
+    )
 
     priority = serializers.ChoiceField(
         choices=Task.PRIORITY_CHOICES,
         required=False,
     )
 
+    dependency_ids = serializers.PrimaryKeyRelatedField(
+        queryset=Task.objects.filter(
+            is_deleted=False,
+            is_archived=False,
+        ),
+        many=True,
+        required=False,
+    )
+
+    image_files = serializers.ListField(
+        child=serializers.ImageField(),
+        required=False,
+    )
+    document_files = serializers.ListField(
+        child=serializers.FileField(),
+        required=False,
+    )
+
+    def validate_image_files(self, files):
+        allowed_extensions = {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".webp",
+        }
+        max_size = 5 * 1024 * 1024
+
+        if len(files) > 5:
+            raise serializers.ValidationError(
+                "You can upload a maximum of 5 images."
+            )
+
+        for image in files:
+            extension = os.path.splitext(image.name)[1].lower()
+            if extension not in allowed_extensions:
+                raise serializers.ValidationError(
+                    f"Unsupported image type: {extension}"
+                )
+            if image.size > max_size:
+                raise serializers.ValidationError(
+                    f"Image '{image.name}' exceeds the maximum size of 5 MB."
+                )
+
+        return files
+
+    def validate_document_files(self, files):
+        allowed_extensions = {
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".ppt",
+            ".pptx",
+            ".txt",
+            ".csv",
+            ".zip",
+        }
+        max_size = 10 * 1024 * 1024
+
+        if len(files) > 5:
+            raise serializers.ValidationError(
+                "You can upload a maximum of 5 files."
+            )
+
+        for document in files:
+            extension = os.path.splitext(document.name)[1].lower()
+            if extension not in allowed_extensions:
+                raise serializers.ValidationError(
+                    f"Unsupported file type: {extension}"
+                )
+            if document.size > max_size:
+                raise serializers.ValidationError(
+                    f"File '{document.name}' exceeds the maximum size of 10 MB."
+                )
+
+        return files
 
     def validate(self, attrs):
         bug = self.context["bug"]
         assigned_to = attrs.get("assigned_to")
+        dependencies = attrs.get("dependency_ids", [])
+        expected_duration = attrs.get("expected_duration")
+
+        if expected_duration and expected_duration.total_seconds() <= 0:
+            raise serializers.ValidationError({
+                "expected_duration": "It must be greater than 0."
+            })
 
         if assigned_to:
             is_member = ProjectRole.objects.filter(
@@ -454,6 +564,15 @@ class BugToTaskSerializer(serializers.Serializer):
                     "assigned_to": (
                         "The selected user is not a member "
                         "of this project."
+                    )
+                })
+
+        for dependency_task in dependencies:
+            if dependency_task.project_id != bug.project_id:
+                raise serializers.ValidationError({
+                    "dependency_ids": (
+                        f"Task {dependency_task.id} does not belong "
+                        "to this bug's project."
                     )
                 })
 

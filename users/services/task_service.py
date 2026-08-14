@@ -278,6 +278,25 @@ class TaskService:
                     expected_duration=expected_duration,
                     actual_duration=actual_duration,
                 )
+                # ---------------------------------------------------------
+            if due_date:
+                now = timezone.now()
+
+                if due_date < now:
+                    raise ValidationError({
+                        "due_date": "Due date cannot be in the past."
+                    })
+
+                if expected_duration:
+                    available_time = due_date - now
+                    if expected_duration > available_time:
+                        raise ValidationError({
+                            "expected_duration": (
+                                "The expected duration exceeds the remaining "
+                                "time until the due date."
+                            )
+                        })
+
             task = Task.objects.create(
                 creator=user,
                 status="TODO",

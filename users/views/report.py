@@ -620,6 +620,25 @@ class BugReportViewSet(BaseSubmissionViewSet):
             ],
             due_date=serializer.validated_data["due_date"],
             priority=serializer.validated_data.get("priority"),
+            title=serializer.validated_data.get("title"),
+            description=serializer.validated_data.get("description"),
+            link=(
+                serializer.validated_data["link"]
+                if "link" in serializer.validated_data
+                else None
+            ),
+            dependency_tasks=serializer.validated_data.get(
+                "dependency_ids",
+                [],
+            ),
+            image_files=serializer.validated_data.get(
+                "image_files",
+                [],
+            ),
+            document_files=serializer.validated_data.get(
+                "document_files",
+                [],
+            ),
         )
 
         return Response(

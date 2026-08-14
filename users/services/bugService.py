@@ -7,9 +7,15 @@ from users.models import (
     BugTaskLink,
     ProjectRole,
     Task,
+    TaskFile,
+    TaskImage,
     User,
 )
 from users.services import UserAvailabilityService
+from users.services.task_service import (
+    TaskService,
+    validate_employee_task_availability,
+)
 
 
 class BugReportService:
@@ -190,6 +196,12 @@ class BugReportService:
         expected_duration,
         due_date,
         priority=None,
+        title=None,
+        description=None,
+        link=None,
+        dependency_tasks=None,
+        image_files=None,
+        document_files=None,
     ):
         BugReportService._ensure_manager(
             manager,
@@ -223,13 +235,25 @@ class BugReportService:
                 assigned_to,
                 action="task assignment",
             )
+            validate_employee_task_availability(
+                employee=assigned_to,
+                due_date=due_date,
+                expected_duration=expected_duration,
+                actual_duration=None,
+            )
+
+        final_title = title if title is not None else bug.title
+        final_description = (
+            description if description is not None else bug.description
+        )
+        final_link = link if link is not None else bug.url
 
         task = Task.objects.create(
             creator=manager,
             project=bug.project,
             type="BUG",
-            title=bug.title,
-            description=bug.description,
+            title=final_title,
+            description=final_description,
             priority=(
                 priority
                 or BugReportService._priority_from_dangerous_level(
@@ -240,7 +264,27 @@ class BugReportService:
             expected_duration=expected_duration,
             due_date=due_date,
             assigned_to=assigned_to,
-            link=bug.url,
+            link=final_link,
+        )
+
+        for image in image_files or []:
+            TaskImage.objects.create(
+                task=task,
+                user=manager,
+                image=image,
+            )
+
+        for document in document_files or []:
+            TaskFile.objects.create(
+                task=task,
+                user=manager,
+                file=document,
+            )
+
+        TaskService.create_dependencies(
+            task=task,
+            dependency_tasks=dependency_tasks or [],
+            created_by=manager,
         )
 
         BugTaskLink.objects.create(
@@ -263,8 +307,8 @@ class BugReportService:
                 notification_type="TASK_ASSIGNED",
                 title="Bug task assigned",
                 message=(
-                    f"You were assigned to fix the bug "
-                    f"'{bug.title}'."
+                    f"You were assigned to fix the bug task "
+                    f"'{task.title}'."
                 ),
                 navigation_target=f"/tasks/{task.id}",
             )
