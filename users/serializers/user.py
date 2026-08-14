@@ -64,6 +64,7 @@ class ProjectMemberDetailSerializer(serializers.ModelSerializer):
     completed_tasks = serializers.SerializerMethodField()
     user = UserSerializer(read_only=True)
     can_update_role = serializers.SerializerMethodField()
+    can_remove_member = serializers.SerializerMethodField()
     class Meta:
         model = ProjectRole
         fields = [
@@ -75,6 +76,22 @@ class ProjectMemberDetailSerializer(serializers.ModelSerializer):
             'can_delete',
             "can_update_role",
         ]
+    def get_can_remove_member(self, obj):
+        request = self.context.get("request")
+
+        if not request or not request.user.is_authenticated:
+            return False
+
+        is_admin = ProjectRole.objects.filter(
+            project=obj.project,
+            user=request.user,
+            role="ADMIN",
+        ).exists()
+
+        return (
+            is_admin
+            and obj.user_id != request.user.id
+        )
     def get_can_delete(self, obj):
         requester_role = self._get_requester_role(obj)
 
@@ -136,17 +153,29 @@ class ProjectMemberDetailSerializer(serializers.ModelSerializer):
             == request.user.id
         )
     def get_can_update_role(self, obj):
-        requester_role = self._get_requester_role(obj)
-
         request = self.context.get("request")
 
-        if request and obj.user_id == request.user.id:
+        if not request or not request.user.is_authenticated:
             return False
 
-        return (
-            self._is_workspace_owner(obj)
-            or requester_role in ["ADMIN", "MANAGER"]
-        )
+        requester_role = ProjectRole.objects.filter(
+            project=obj.project,
+            user=request.user,
+        ).values_list(
+            "role",
+            flat=True,
+        ).first()
+
+        if requester_role == "ADMIN":
+            return obj.user_id != request.user.id
+
+        if requester_role == "MANAGER":
+            return (
+                obj.role != "ADMIN"
+                and obj.user_id != request.user.id
+            )
+
+        return False
 
 ###########################################################################################################
 

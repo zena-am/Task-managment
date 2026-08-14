@@ -103,7 +103,7 @@ class InvitationService:
 
     @staticmethod
     def _workspace_role(role):
-        return "ADMIN"
+        return "MEMBER"
 
     @staticmethod
     def _project_role(role):
@@ -166,6 +166,9 @@ class InvitationService:
 
     @staticmethod
     def send_workspace_invitation(sender, data):
+        workspace = InvitationService._get_workspace(
+            data.get("workspace") or data.get("workspace_id")
+        )
 
         can_invite = (
             workspace.creator_id == sender.id
@@ -177,25 +180,11 @@ class InvitationService:
         )
 
         if not can_invite:
-            raise  BaseAppException(
-                            detail="You can only invite member to your own project.",
-                            code="PermissionDeniedError",
-                            status_code=403
-                        )
-        normalized_email = email.strip().lower()
-        sender_email = sender.email.strip().lower()
-
-        if normalized_email == sender_email:
-            raise ValidationError({
-                "email": (
-                    "You cannot send an invitation to yourself."
-                ),
-                "code": "CANNOT_INVITE_YOURSELF",
-            })
-
-        workspace = InvitationService._get_workspace(
-            data.get("workspace") or data.get("workspace_id")
-        )
+            raise BaseAppException(
+                detail="You can only invite member to your own project.",
+                code="PermissionDeniedError",
+                status_code=403,
+            )
         email_items = InvitationService._normalize_email_items(data)
         if not email_items:
             raise EmailAndWorkspaceRequired()

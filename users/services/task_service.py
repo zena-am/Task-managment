@@ -191,8 +191,12 @@ class TaskService:
         if task.assigned_to is not None:
             raise TaskAlreadyAssigned()
 
-        is_project_member = ProjectRole.objects.filter(project=task.project, user=user).exists()
-        if not is_project_member:
+        can_claim = ProjectRole.objects.filter(
+            project=task.project,
+            user=user,
+            role__in=["ADMIN", "MANAGER"],
+        ).exists()
+        if not can_claim:
             raise PermissionDeniedError()
 
         task.assigned_to = user
@@ -485,7 +489,7 @@ class TaskService:
         if status_value not in allowed_choices:
                     raise InvalidStatusError()
         TASK_TRANSITIONS = {
-            "TODO": ["INPROGRESS"],
+            "TODO": ["INPROGRESS", "DONE"],
             "INPROGRESS": ["TODO", "REVIEW", "DONE"],
             "PAUSED": ["INPROGRESS", "DONE"],
             "REVIEW": [],
@@ -506,7 +510,7 @@ class TaskService:
         ).exists()
 
         is_assignee = task.assigned_to_id == user.id
-        if not is_assignee and not is_project_manager:
+        if not is_assignee:
             raise PermissionDeniedError()
 
         if status_value == "DONE":

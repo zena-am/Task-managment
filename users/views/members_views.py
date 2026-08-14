@@ -3,6 +3,7 @@ from datetime import timedelta
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema, extend_schema_view
+from jsonschema import ValidationError
 from rest_framework import status, viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -82,7 +83,16 @@ class ProjectMemberViewSet(viewsets.ModelViewSet):
             project=project,
             user_id=member_id,
         )
+        requester_role = ProjectRole.objects.filter(
+                project=project,
+                user=request.user,
+            ).first()
 
+        if (
+                requester_role is None
+                or requester_role.role not in ["ADMIN", "MANAGER"]
+            ):
+                raise PermissionDeniedError()
         new_role = request.data.get("role")
         if new_role not in ['ADMIN', 'MANAGER', 'EMPLOYEE']:
                     raise BaseAppException(
@@ -123,6 +133,35 @@ class ProjectMemberViewSet(viewsets.ModelViewSet):
         project_id = kwargs.get('project_pk')
         member_id = kwargs.get('pk')
 
+        project = get_object_or_404(
+            Project,
+            id=project_id,
+        )
+
+        requester_role = ProjectRole.objects.filter(
+                    project=project,
+                user=request.user,
+            ).first()
+
+        if (
+                requester_role is None
+                or requester_role.role != "ADMIN"
+            ):
+                raise PermissionDeniedError()
+
+        member_role = get_object_or_404(
+            ProjectRole.objects.select_related("user"),
+            project=project,
+            user_id=member_id,
+        )
+
+        member_user = member_role.user
+
+        if member_user.id == request.user.id:
+                raise ValidationError({
+                    "detail": "You cannot remove yourself from the project.",
+                    "code": "CANNOT_REMOVE_SELF",
+                })
         if not ProjectRole.objects.filter(
             project_id=project_id,
             user=request.user,
@@ -166,13 +205,14 @@ class ProjectMemberViewSet(viewsets.ModelViewSet):
                     changes={
                         "subject_name": (
                             member.get_full_name()
-                            or member.username
+                            or member_user.username
                         ),
                         "target_title": task.title,
                         "previous_assignee_id": member.id,
                         "previous_assignee_name": (
-                            member.get_full_name()
-                            or member.username
+
+                            member_user.get_full_name()
+                or member_user.username
                         ),
                         "reason": (
                             "Task was returned to the unassigned "
@@ -342,6 +382,7 @@ class WorkSpaceMemberViewSet(viewsets.ModelViewSet):
                         "subject_name": (
                             user.get_full_name()
                             or user.username
+                            or user.user.username
                         ),
                         "target_title": task.title,
                         "previous_assignee_id": user.id,

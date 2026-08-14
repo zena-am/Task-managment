@@ -56,6 +56,10 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
+
+        if instance.creator_id != request.user.id:
+            raise PermissionDeniedError()
+
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         result = WorkspaceServices.update_workspace(
@@ -82,6 +86,10 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         workspace = self.get_object()
+
+        if workspace.creator_id != request.user.id:
+            raise PermissionDeniedError()
+
         workspace_id = workspace.id
         workspace_name = workspace.name
         self.perform_destroy(workspace)

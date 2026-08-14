@@ -71,6 +71,7 @@ class TaskTransferService:
             ],
             is_deleted=False,
             is_archived=False,
+            
         )
 
         count = 0

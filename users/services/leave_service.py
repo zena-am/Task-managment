@@ -7,6 +7,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from users.models import LeaveTaskAction, ProjectRole, Task
 from users.services.task_service import TaskService
+from users.services.task_transfer_service import TaskTransferService
 
 class LeaveRequestService:
     @staticmethod
@@ -29,16 +30,29 @@ class LeaveRequestService:
                 "You cannot analyze your own leave request."
             )
 
-        is_manager = ProjectRole.objects.filter(
+        reviewer_role = ProjectRole.objects.filter(
             project=leave_request.project,
             user=manager_user,
             role__in=["ADMIN", "MANAGER"],
-        ).exists()
+        ).first()
 
-
-        if not is_manager:
+        if not reviewer_role:
             raise PermissionDenied(
                 "You are not allowed to analyze this leave request."
+            )
+
+        request_owner_role = ProjectRole.objects.filter(
+            project=leave_request.project,
+            user=leave_request.user,
+        ).first()
+
+        if (
+            request_owner_role
+            and request_owner_role.role == "MANAGER"
+            and reviewer_role.role != "ADMIN"
+        ):
+            raise PermissionDenied(
+                "Only a project admin can analyze a manager's leave request."
             )
 
         if not leave_request.leave_start:
@@ -652,8 +666,6 @@ class LeaveRequestService:
                 )
             })
 
-        now = timezone.now()
-
         leave_actions = (
             LeaveTaskAction.objects
             .select_for_update()
@@ -707,12 +719,10 @@ class LeaveRequestService:
             })
 
         leave_request.status = "COMPLETED"
-        leave_request.actual_return_at = now
 
         leave_request.save(
             update_fields=[
                 "status",
-                "actual_return_at",
                 "updated_at",
             ]
         )
@@ -720,7 +730,6 @@ class LeaveRequestService:
         return {
             "request_id": leave_request.id,
             "status": leave_request.status,
-            "actual_return_at": leave_request.actual_return_at,
             "resumed_tasks": resumed_tasks,
         }
 
@@ -766,7 +775,7 @@ class LeaveRequestService:
                 )
             })
         leave_action.previous_assignee = task.assigned_to
-        TaskService.assign_task_to_user(
+        TaskTransferService.assign_task_to_user(
             task=task,
             new_assignee=new_assignee,
             performed_by=manager_user,

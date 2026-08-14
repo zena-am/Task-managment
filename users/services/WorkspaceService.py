@@ -84,6 +84,8 @@ class WorkspaceServices:
             Task.objects.filter(
                 assigned_to=user,
                 project__workspace=workspace,
+            ).exclude(
+                status="DONE",
             ).update(
                 assigned_to=None,
                 assignment_state="UNASSIGNED_RETURNED",

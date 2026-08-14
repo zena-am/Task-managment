@@ -2,7 +2,7 @@ from django.db import transaction
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from users.constants import create_activity_log
-from users.models import LeaveTaskAction, Notification, ProjectRole, RequestForm
+from users.models import LeaveTaskAction, Notification, ProjectRole, RequestForm, Task
 from users.errors.exceptions import BaseAppException
 
 from datetime import timedelta
@@ -50,6 +50,21 @@ class ReportService:
     def save_technical_report_draft(serializer, user):
         task = serializer.validated_data.get("task")
 
+        project_role = ProjectRole.objects.filter(
+            project=task.project,
+            user=user,
+        ).values_list("role", flat=True).first()
+
+        if project_role != "EMPLOYEE" or task.assigned_to_id != user.id:
+            raise PermissionDenied(
+                "Only the employee assigned to this task can create its report."
+            )
+
+        if task.status != "INPROGRESS":
+            raise ValidationError(
+                "Reports can only be created while the task is in progress."
+            )
+
         latest_report = task.technical_reports.order_by("-created_at").first()
 
         if latest_report:
@@ -94,6 +109,26 @@ class ReportService:
 
     @staticmethod
     def update_technical_report_draft(report, serializer, user):
+        project_role = ProjectRole.objects.filter(
+            project=report.task.project,
+            user=user,
+        ).values_list("role", flat=True).first()
+
+        if project_role != "EMPLOYEE" or report.task.assigned_to_id != user.id:
+            raise PermissionDenied(
+                "Only the employee assigned to this task can update its draft report."
+            )
+
+        if report.user_id != user.id:
+            raise PermissionDenied(
+                "You can only update your own technical report."
+            )
+
+        if report.status != "DRAFT":
+            raise ValidationError({
+                "status": "Only draft reports can be updated."
+            })
+
         report = serializer.save()
 
         create_activity_log(
@@ -109,6 +144,45 @@ class ReportService:
         )
 
         return report
+
+    @staticmethod
+    def delete_technical_report_draft(report, user):
+        project_role = ProjectRole.objects.filter(
+            project=report.task.project,
+            user=user,
+        ).values_list("role", flat=True).first()
+
+        if project_role != "EMPLOYEE" or report.task.assigned_to_id != user.id:
+            raise PermissionDenied(
+                "Only the employee assigned to this task can delete its draft report."
+            )
+
+        if report.user_id != user.id:
+            raise PermissionDenied(
+                "You can only delete your own technical report."
+            )
+
+        if report.status != "DRAFT":
+            raise ValidationError({
+                "status": "Only draft reports can be deleted."
+            })
+
+        create_activity_log(
+            user=user,
+            action="REPORT_DELETED",
+            action_id=report.id,
+            changes={
+                "subject_name": user.username,
+                "target_title": report.task.title,
+                "reason": (
+                    f"Draft report for task '{report.task.title}' "
+                    f"was deleted by {user.username}."
+                ),
+                "is_by_admin": False,
+            },
+        )
+
+        report.delete()
 
 
     @staticmethod
@@ -513,8 +587,27 @@ class FormService:
         request_form,
         status_value,
     ):
-        if status_value in ["REJECTED", "ON_HOLD"]:
+        if status_value not in ["APPROVED", "REJECTED"]:
             return
+
+        has_active_tasks = Task.objects.filter(
+            project=request_form.project,
+            assigned_to=request_form.user,
+            is_deleted=False,
+            is_archived=False,
+        ).exists()
+
+        analysis_exists = LeaveTaskAction.objects.filter(
+            request=request_form,
+        ).exists()
+
+        if has_active_tasks and not analysis_exists:
+            raise ValidationError({
+                "leave_analysis": (
+                    "Leave impact must be analyzed before "
+                    "approving or rejecting this request."
+                )
+            })
 
         if status_value != "APPROVED":
             return

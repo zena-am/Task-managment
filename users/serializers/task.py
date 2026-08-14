@@ -118,6 +118,10 @@ class TaskSerializer(serializers.ModelSerializer):
             'assigned_to', 'assigned_to_detail','supervisors_detail', 'supervisors',  'is_overdue','images','files',
             'dependencies',
                 'dependents',
+                "description",
+"type",
+"assignment_state",
+"is_archived",
         ]
 
         read_only_fields = ['start_time', 'end_time']
@@ -217,7 +221,7 @@ class TaskSerializer(serializers.ModelSerializer):
             return {
                 "can_start": (
                     is_assigned
-                    and obj.status == "TODO"
+                    and obj.can_start
                 ),
 
                 "can_pause": (
@@ -292,8 +296,8 @@ class TaskSerializer(serializers.ModelSerializer):
             "can_mark_done_directly":(is_manager
                 and is_assigned
                 and obj.status in [
+                    "TODO",
                     "INPROGRESS",
-                    "PAUSED",
                 ]),
             "can_send_to_review": (
                 is_employee

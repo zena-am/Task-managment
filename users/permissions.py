@@ -1,5 +1,5 @@
 from rest_framework import permissions
-from .models import ProjectRole, WorkSpaceMember
+from .models import Project, ProjectRole, WorkSpaceMember
 from rest_framework.permissions import BasePermission
 
 class IsWorkspaceOwnerOrReadOnly(permissions.BasePermission):
@@ -64,21 +64,40 @@ class CanUpdateTaskStatus(permissions.BasePermission):
     message = "You can update only your assigned task status."
 
     def has_object_permission(self, request, view, obj):
-        is_assignee = obj.assigned_to == request.user
-        is_project_manager = ProjectRole.objects.filter(
-            project=obj.project,
-            user=request.user,
-            role__in=["MANAGER", "ADMIN"]
-        ).exists()
-        return is_assignee or is_project_manager
+        return obj.assigned_to_id == request.user.id
 
 
 class IsTeamManagerForProject(permissions.BasePermission):
 
     message = "You are not a manager."
 
-    def has_permission(self, request, view):
+    def _can_manage_project(self, user, project_id):
+        project = Project.objects.filter(
+            id=project_id,
+        ).select_related(
+            'workspace',
+        ).first()
 
+        if not project:
+            return False
+
+        if project.workspace.creator_id == user.id:
+            return True
+
+        if WorkSpaceMember.objects.filter(
+            workspace=project.workspace,
+            user=user,
+            role='ADMIN',
+        ).exists():
+            return True
+
+        return ProjectRole.objects.filter(
+            project=project,
+            user=user,
+            role__in=['MANAGER', 'ADMIN'],
+        ).exists()
+
+    def has_permission(self, request, view):
         project_id = (
             view.kwargs.get('project_pk')
             or view.kwargs.get('project_id')
@@ -87,16 +106,21 @@ class IsTeamManagerForProject(permissions.BasePermission):
 
         if not project_id:
             return False
-        return ProjectRole.objects.filter(
-            project_id=project_id,
-            user=request.user,
-            role__in=['MANAGER', 'ADMIN']
-        ).exists()
+
+        return self._can_manage_project(
+            request.user,
+            project_id,
+        )
+
     def has_object_permission(self, request, view, obj):
-        if not hasattr(obj, 'project'):
+        project = getattr(obj, 'project', None)
+        if project is None:
             return False
-        is_project_manager  = ProjectRole.objects.filter(project=obj.project,user=request.user).filter(role__in=['MANAGER', 'ADMIN']).exists()
-        return is_project_manager
+
+        return self._can_manage_project(
+            request.user,
+            project.id,
+        )
 
 class IsTeamManager(permissions.BasePermission):
     message = "You are not a manager of any project."
@@ -136,11 +160,21 @@ class TechnicalReportPermission(permissions.BasePermission):
 
     def has_object_permission(self, request, view, obj):
         is_owner = obj.user == request.user
-        is_project_manager = ProjectRole.objects.filter(project=obj.task.project,user=request.user,role__in=["MANAGER", "ADMIN"]).exists()
+        is_project_manager = ProjectRole.objects.filter(
+            project=obj.task.project,
+            user=request.user,
+            role__in=["MANAGER", "ADMIN"],
+        ).exists()
+
         if view.action in ["update", "partial_update", "destroy", "submit"]:
             return is_owner and obj.status == "DRAFT"
+
         if request.method in permissions.SAFE_METHODS:
-            return is_owner or is_project_manager
+            return is_owner or (
+                is_project_manager
+                and obj.status != "DRAFT"
+            )
+
         return False
 
 

@@ -13,11 +13,38 @@ class TechnicalReportSerializer(serializers.ModelSerializer):
 
 class RequestFormSerializer(serializers.ModelSerializer):
     user = serializers.HiddenField(default=serializers.CurrentUserDefault())
+    user_id = serializers.IntegerField(source="user.id", read_only=True)
+    user_name = serializers.SerializerMethodField()
+    requester_role = serializers.SerializerMethodField()
+    is_own_request = serializers.SerializerMethodField()
 
     class Meta:
         model = RequestForm
-        fields = ['leave_start','leave_end' ,'id','request_type', 'priority', 'project', 'title', 'file', 'image', 'time', 'reason', 'user','status', 'manager_feedback']
-        read_only_fields = ['id','status', 'manager_feedback']
+        fields = [
+            'leave_start', 'leave_end', 'id', 'request_type', 'priority',
+            'project', 'title', 'file', 'image', 'time', 'reason', 'user',
+            'user_id', 'user_name', 'requester_role', 'is_own_request',
+            'status', 'manager_feedback',
+        ]
+        read_only_fields = [
+            'id', 'user_id', 'user_name', 'requester_role', 'is_own_request',
+            'status', 'manager_feedback',
+        ]
+
+    def get_user_name(self, obj):
+        return obj.user.get_full_name() or obj.user.username
+
+    def get_requester_role(self, obj):
+        return ProjectRole.objects.filter(
+            project=obj.project,
+            user=obj.user,
+        ).values_list("role", flat=True).first()
+
+    def get_is_own_request(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        return obj.user_id == request.user.id
 
     def validate(self, attrs):
         instance = getattr(self, "instance", None)

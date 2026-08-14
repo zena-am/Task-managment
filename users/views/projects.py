@@ -5,7 +5,7 @@ from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from users.errors.exceptions import BaseAppException
+from users.errors.exceptions import BaseAppException, PermissionDeniedError
 from users.errors.messages.success import success_response
 from users.models import Project, ProjectRole, Task, WorkSpaceMember
 from users.services.project_logic import ProjectServiceLogic as ProjectService
@@ -111,6 +111,24 @@ class ProjectViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
+
+        is_workspace_admin = (
+            instance.workspace.creator_id == request.user.id
+            or WorkSpaceMember.objects.filter(
+                workspace=instance.workspace,
+                user=request.user,
+                role='ADMIN',
+            ).exists()
+        )
+        is_project_admin = ProjectRole.objects.filter(
+            project=instance,
+            user=request.user,
+            role='ADMIN',
+        ).exists()
+
+        if not (is_workspace_admin or is_project_admin):
+            raise PermissionDeniedError()
+
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         project = serializer.save()
@@ -128,6 +146,10 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
+
+        if instance.workspace.creator_id != request.user.id:
+            raise PermissionDeniedError()
+
         project_id = instance.id
         project_name = instance.name
         self.perform_destroy(instance)
@@ -170,7 +192,12 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 )
 
         with transaction.atomic():
-            Task.objects.filter(project=project, assigned_to=user).update(
+            Task.objects.filter(
+                project=project,
+                assigned_to=user,
+            ).exclude(
+                status="DONE",
+            ).update(
                 assigned_to=None,
                 assignment_state="UNASSIGNED_RETURNED",
                 status="TODO"

@@ -181,7 +181,7 @@ class BaseSubmissionViewSet(viewsets.ModelViewSet):
 class TechnicalReportViewSet(BaseSubmissionViewSet):
     permission_classes = [
         IsAuthenticated,
-
+        TechnicalReportPermission,
     ]
     queryset = TechnicalReportForm.objects.all()
     serializer_class = TechnicalReportSerializer
@@ -199,7 +199,15 @@ class TechnicalReportViewSet(BaseSubmissionViewSet):
 
         if managed_projects.exists():
             queryset = self.queryset.filter(
-                Q(task__project_id__in=managed_projects) | Q(user=user)
+                Q(user=user)
+                | Q(
+                    task__project_id__in=managed_projects,
+                    status__in=[
+                        "SUBMITTED",
+                        "APPROVED",
+                        "REJECTED",
+                    ],
+                )
             )
         else:
             queryset = self.queryset.filter(user=user)

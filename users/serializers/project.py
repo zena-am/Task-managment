@@ -16,15 +16,41 @@ class ProjectSerializer(serializers.ModelSerializer):
     stats = serializers.SerializerMethodField()
     permissions = serializers.SerializerMethodField()
     can_create_task = serializers.SerializerMethodField()
+    role_in_project = serializers.SerializerMethodField()
 
     class Meta:
         model = Project
         fields = [
             'id', 'workspace', 'workspace_name', 'name', 'description','actions','stats',
             'status', 'status_display', 'deadline', 'created_at', 'updated_at', 'members','is_owner','permissions',
-            'can_create_task',
+            'can_create_task', 'role_in_project',
         ]
         read_only_fields = ['created_at']
+
+    def get_role_in_project(self, obj):
+        request = self.context.get("request")
+        user = request.user if request else None
+
+        if not user or not user.is_authenticated:
+            return None
+
+        if obj.workspace.creator_id == user.id:
+            return "ADMIN"
+
+        is_workspace_admin = WorkSpaceMember.objects.filter(
+            workspace=obj.workspace,
+            user=user,
+            role="ADMIN",
+        ).exists()
+
+        if is_workspace_admin:
+            return "ADMIN"
+
+        return ProjectRole.objects.filter(
+            project=obj,
+            user=user,
+        ).values_list("role", flat=True).first()
+
     def get_can_create_task(self, obj):
         request = self.context.get("request")
         user = request.user if request else None
@@ -87,6 +113,7 @@ class ProjectSerializer(serializers.ModelSerializer):
         can_manage_project = (
             is_workspace_admin
             or is_project_admin
+            
         )
 
         can_invite_members = (
@@ -120,8 +147,16 @@ class ProjectSerializer(serializers.ModelSerializer):
             or is_project_admin
             or is_project_manager),
 
-            "can_update_member_role": can_manage_project,
-            "can_remove_member": can_manage_project,
+            "can_update_member_role": (
+                is_workspace_admin
+                or is_project_admin
+                or is_project_manager
+            ),
+
+            "can_remove_member": (
+                is_workspace_admin
+                or is_project_admin
+            ),
 
             "can_view_unassigned_tasks": (
                     is_workspace_admin
@@ -169,19 +204,37 @@ class ProjectSerializer(serializers.ModelSerializer):
             }
         }
     def get_actions(self, obj):
-        request = self.context.get('request')
-        if request and request.user.is_authenticated:
-            if obj.workspace.creator == request.user:
-                return [
-                {"id": "edit", "label": "Edit Project",},
-                {"id": "delete", "label": "Delete Project",}
-            ]
-        else:
-            return [
-                {"id": "leave", "label": "Leave project", }
-            ]
-        return []
+        request = self.context.get("request")
 
+        if not request or not request.user.is_authenticated:
+            return []
+
+        if obj.workspace.creator == request.user:
+            return [
+                {
+                    "id": "edit",
+                    "label": "Edit Project",
+                },
+                {
+                    "id": "delete",
+                    "label": "Delete Project",
+                },
+            ]
+
+        is_project_member = ProjectRole.objects.filter(
+            project=obj,
+            user=request.user,
+        ).exists()
+
+        if is_project_member:
+            return [
+                {
+                    "id": "leave",
+                    "label": "Leave project",
+                }
+            ]
+
+        return []
     def get_is_owner(self, obj):
         request = self.context.get('request')
         if request and request.user.is_authenticated:
