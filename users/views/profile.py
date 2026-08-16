@@ -15,16 +15,15 @@ class ProfileView(generics.RetrieveUpdateDestroyAPIView):
 
     def get_object(self):
         return self.request.user
-
     def _serialized_profile(self, user):
         data = dict(self.get_serializer(user).data)
         data.update({
             "username": user.username,
             "email": user.email,
             "is_profile_completed": bool(user.avatar and user.phone),
+            "has_web_password": bool(user.password) and user.has_usable_password(),
         })
         return data
-
     def retrieve(self, request, *args, **kwargs):
         user = self.get_object()
         return Response(

@@ -75,6 +75,7 @@ class ProjectMemberDetailSerializer(serializers.ModelSerializer):
             'completed_tasks',
             'can_delete',
             "can_update_role",
+            "can_remove_member",
         ]
     def get_can_remove_member(self, obj):
         request = self.context.get("request")
@@ -82,36 +83,34 @@ class ProjectMemberDetailSerializer(serializers.ModelSerializer):
         if not request or not request.user.is_authenticated:
             return False
 
-        is_admin = ProjectRole.objects.filter(
-            project=obj.project,
-            user=request.user,
-            role="ADMIN",
-        ).exists()
+        if obj.user_id == request.user.id:
+            return False
 
-        return (
-            is_admin
-            and obj.user_id != request.user.id
-        )
-    def get_can_delete(self, obj):
         requester_role = self._get_requester_role(obj)
-
-        can_delete = (
-            self._is_workspace_owner(obj)
+        can_remove = (
+            self._is_workspace_admin(obj)
             or requester_role == "ADMIN"
         )
 
-        if not can_delete:
+        if not can_remove:
             return False
 
-        request = self.context.get("request")
+        if obj.role in ["ADMIN", "MANAGER"]:
+            other_manager_exists = ProjectRole.objects.filter(
+                project=obj.project,
+                role__in=["ADMIN", "MANAGER"],
+            ).exclude(
+                user_id=obj.user_id,
+            ).exists()
 
-        if request and obj.user_id == request.user.id:
-            return False
-
-        if obj.role == "ADMIN":
-            return False
+            if not other_manager_exists:
+                return False
 
         return True
+
+    def get_can_delete(self, obj):
+        # Keep the legacy field aligned with the project remove endpoint.
+        return self.get_can_remove_member(obj)
     def get_role(self, obj):
         project_id = self.context.get('project_id')
         project_role = ProjectRole.objects.filter(project_id=project_id, user=obj.user).first()
@@ -147,11 +146,26 @@ class ProjectMemberDetailSerializer(serializers.ModelSerializer):
         if not request or not request.user.is_authenticated:
             return False
 
-
         return (
             obj.project.workspace.creator_id
             == request.user.id
         )
+
+    def _is_workspace_admin(self, obj):
+        request = self.context.get("request")
+
+        if not request or not request.user.is_authenticated:
+            return False
+
+        return (
+            self._is_workspace_owner(obj)
+            or WorkSpaceMember.objects.filter(
+                workspace=obj.project.workspace,
+                user=request.user,
+                role="ADMIN",
+            ).exists()
+        )
+
     def get_can_update_role(self, obj):
         request = self.context.get("request")
 
@@ -166,7 +180,7 @@ class ProjectMemberDetailSerializer(serializers.ModelSerializer):
             flat=True,
         ).first()
 
-        if requester_role == "ADMIN":
+        if self._is_workspace_admin(obj) or requester_role == "ADMIN":
             return obj.user_id != request.user.id
 
         if requester_role == "MANAGER":

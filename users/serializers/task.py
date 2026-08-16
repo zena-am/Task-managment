@@ -590,6 +590,28 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
         remove_file_ids = validated_data.pop('remove_file_ids', [])
         request = self.context.get('request')
 
+        if remove_image_ids or remove_file_ids:
+            user = request.user if request else None
+            role = None
+            is_workspace_owner = False
+
+            if user and user.is_authenticated:
+                role = ProjectRole.objects.filter(
+                    project=instance.project,
+                    user=user,
+                ).values_list('role', flat=True).first()
+                is_workspace_owner = (
+                    instance.project.workspace.creator_id == user.id
+                )
+
+            if role not in ['MANAGER', 'ADMIN'] and not is_workspace_owner:
+                raise serializers.ValidationError({
+                    'attachments': (
+                        'Only a project manager, project admin, or workspace '
+                        'owner can remove task attachments.'
+                    )
+                })
+
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
@@ -599,6 +621,18 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
 
         for file in document_files:
             TaskFile.objects.create(task=instance, user=request.user, file=file)
+
+        if remove_image_ids:
+            TaskImage.objects.filter(
+                task=instance,
+                id__in=remove_image_ids,
+            ).delete()
+
+        if remove_file_ids:
+            TaskFile.objects.filter(
+                task=instance,
+                id__in=remove_file_ids,
+            ).delete()
 
         return instance
 #######################################################################################################
