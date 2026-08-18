@@ -10,7 +10,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import serializers
-
+from django.utils.dateparse import parse_datetime
 from users.models import Project
 from users.services.working_time_service import WorkingTimeService
 from users.errors.exceptions import BaseAppException, PermissionDeniedError
@@ -272,6 +272,13 @@ class TaskWorkingTimeCheckAPIView(APIView):
         expected_hours = request.data.get("expected_hours")
         due_date = request.data.get("due_date")
 
+
+        due_date = parse_datetime(due_date)
+
+        if not due_date:
+            raise serializers.ValidationError({
+                "due_date": "Invalid datetime format."
+            })
         if not project_id or not expected_hours or not due_date:
             raise serializers.ValidationError({
                 "detail": "project, expected_hours and due_date are required."
