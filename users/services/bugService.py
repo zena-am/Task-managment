@@ -237,6 +237,7 @@ class BugReportService:
             )
             validate_employee_task_availability(
                 employee=assigned_to,
+                project=bug.project,
                 due_date=due_date,
                 expected_duration=expected_duration,
                 actual_duration=None,
@@ -491,18 +492,7 @@ class BugReportService:
                     for link in active_tasks
                 ],
             })
-        has_linked_tasks = BugTaskLink.objects.filter(
-            bug=bug,
-        ).exists()
 
-        if has_linked_tasks and bug.status != "VERIFIED":
-            raise ValidationError({
-                "detail": (
-                    "The bug reporter must verify the fix "
-                    "before closing the bug."
-                ),
-                "code": "BUG_FIX_NOT_VERIFIED",
-            })
 
         bug.status = "CLOSED"
 

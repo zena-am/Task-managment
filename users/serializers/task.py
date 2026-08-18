@@ -3,6 +3,7 @@ import os
 from django.utils import timezone
 from rest_framework import serializers
 from users.serializers.user import UserSerializer
+from users.services.task_service import TaskService
 from ..models import Project, ProjectRole, Task, TaskDependency,TaskImage,TaskFile, TechnicalReportForm, User
 MAX_IMAGE_SIZE = 5 * 1024 * 1024
 MAX_DOCUMENT_SIZE = 10 * 1024 * 1024
@@ -75,6 +76,7 @@ class TaskFileSerializer(serializers.ModelSerializer):
         return obj.file.name.split('/')[-1]
 
 class TaskSerializer(serializers.ModelSerializer):
+    pause_context = serializers.SerializerMethodField()
     priority_display = serializers.CharField(source='get_priority_display', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     permissions = serializers.SerializerMethodField()
@@ -107,6 +109,7 @@ class TaskSerializer(serializers.ModelSerializer):
         fields = [
             'blocked_by',
             'is_blocked' ,
+            'pause_context',
             'can_start',
             "is_deleted",
             "deleted_at",
@@ -125,6 +128,74 @@ class TaskSerializer(serializers.ModelSerializer):
         ]
 
         read_only_fields = ['start_time', 'end_time']
+    def get_pause_context(self, obj):
+        if obj.status != "PAUSED":
+            return None
+
+
+        leave_action = (
+            obj.leave_request_actions
+            .filter(
+                action="PAUSE_TASK",
+                is_resolved=True,
+                request__status__in=[
+                    "ACTION_REQUIRED",
+                    "PENDING",
+                    "ON_HOLD",
+                    "APPROVED",
+                ],
+            )
+            .select_related(
+                "request",
+                "request__user",
+            )
+            .order_by("-resolved_at")
+            .first()
+        )
+
+        if leave_action is None:
+            return {
+                "reason": "MANUAL",
+            }
+
+        employee = leave_action.request.user
+
+        return {
+            "reason": "LEAVE",
+
+            "leave_action_id": (
+                leave_action.id
+            ),
+
+            "leave_request_id": (
+                leave_action.request_id
+            ),
+
+            "leave_status": (
+                leave_action.request.status
+            ),
+
+            "employee_id": (
+                employee.id
+            ),
+
+            "employee_name": (
+                employee.get_full_name()
+                or employee.username
+            ),
+
+            "leave_start": (
+                leave_action.request.leave_start
+            ),
+
+            "leave_end": (
+                leave_action.request.leave_end
+            ),
+
+            "new_due_date": (
+                leave_action.new_due_date
+            ),
+        }
     def get_dependencies(self, obj):
         relations = obj.task_dependencies.select_related(
             "predecessor",
@@ -217,6 +288,27 @@ class TaskSerializer(serializers.ModelSerializer):
                 user=user,
                 status="SUBMITTED",
             ).exists()
+            leave_pause_action = (
+                obj.leave_request_actions
+                .filter(
+                    action="PAUSE_TASK",
+                    is_resolved=True,
+                    request__status__in=[
+                        "ACTION_REQUIRED",
+                        "PENDING",
+                        "ON_HOLD",
+                        "APPROVED",
+                    ],
+                )
+                .select_related("request")
+                .order_by("-resolved_at")
+                .first()
+            )
+
+            is_leave_paused = (
+                obj.status == "PAUSED"
+                and leave_pause_action is not None
+            )
 
             return {
                 "can_start": (
@@ -228,6 +320,11 @@ class TaskSerializer(serializers.ModelSerializer):
                     is_assigned
                     and obj.status == "INPROGRESS"
                 ),
+                "can_resume": (
+                        is_assigned
+                        and obj.status == "PAUSED"
+                        and not is_leave_paused
+                    ),
 
                 "can_send_to_review": (
                     is_assigned
@@ -239,11 +336,14 @@ class TaskSerializer(serializers.ModelSerializer):
                     is_manager
                     and is_assigned
                     and obj.status in ["TODO", "INPROGRESS"]
+                    and not obj.is_blocked
+
                 ),
 
                 "can_reassign": is_manager,
 
-                "can_change_status": is_assigned ,
+                "can_change_status": is_assigned  and not is_leave_paused,
+                "is_leave_paused": is_leave_paused,
             }
     def get_permissions(self, obj):
         request = self.context.get("request")
@@ -270,6 +370,25 @@ class TaskSerializer(serializers.ModelSerializer):
         is_employee = role == "EMPLOYEE"
         is_viewer = role == "VIEWER"
         is_owner = obj.project.workspace.creator_id == user.id
+        leave_pause_action = (
+            obj.leave_request_actions
+            .filter(
+                action="PAUSE_TASK",
+                is_resolved=True,
+                request__status__in=[
+                    "ACTION_REQUIRED",
+                    "PENDING",
+                    "ON_HOLD",
+                    "APPROVED",
+                ],
+            )
+            .exists()
+        )
+
+        is_leave_paused = (
+            obj.status == "PAUSED"
+            and leave_pause_action
+        )
 
         return {
             "can_view": (
@@ -278,8 +397,11 @@ class TaskSerializer(serializers.ModelSerializer):
             ),
 
             "can_update": is_manager or is_owner,
-            "can_update_status":is_assigned,
-            "can_delete": is_manager or is_owner,
+            "can_update_status": (
+            is_assigned
+            and not is_leave_paused
+        ),
+                    "can_delete": is_manager or is_owner,
             "can_assign": is_manager or is_owner,
             "can_create_task": is_manager or is_owner,
             "can_submit_report": (is_employee and is_assigned and obj.status == "INPROGRESS"),
@@ -293,12 +415,15 @@ class TaskSerializer(serializers.ModelSerializer):
             "can_manage_dependencies": (is_manager or is_owner),
 
 
-            "can_mark_done_directly":(is_manager
+            "can_mark_done_directly": (
+                is_manager
                 and is_assigned
                 and obj.status in [
                     "TODO",
                     "INPROGRESS",
-                ]),
+                ]
+                and not obj.is_blocked
+            ),
             "can_send_to_review": (
                 is_employee
                 and is_assigned
@@ -524,7 +649,16 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 "parent": "The parent task must belong to the same project."
             })
+        new_due_date = attrs.get("due_date")
 
+        if (
+            self.instance is not None
+            and "due_date" in attrs
+        ):
+            TaskService.validate_dependency_due_date(
+                task=self.instance,
+                new_due_date=new_due_date,
+            )
         for dependency_task in dependencies:
             if dependency_task.project_id != project.id:
                 raise serializers.ValidationError({

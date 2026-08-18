@@ -1,9 +1,12 @@
+from datetime import timedelta
+
 from django.db import transaction
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from users.constants import create_activity_log, create_notification
 from users.errors.exceptions import PermissionDeniedError
-from users.models import Notification, Project, ProjectRole, Task, User
+from users.models import LeaveTaskAction, Notification, Project, ProjectRole, Task, User
 from users.services import UserAvailabilityService
 from users.services.task_service import validate_employee_task_availability
 
@@ -71,7 +74,6 @@ class TaskTransferService:
             ],
             is_deleted=False,
             is_archived=False,
-            
         )
 
         count = 0
@@ -79,13 +81,10 @@ class TaskTransferService:
         for task in tasks:
             validate_employee_task_availability(
                 employee=new_assignee,
+                project=project,
                 due_date=task.due_date,
-                expected_duration=(
-                    task.expected_duration
-                ),
-                actual_duration=(
-                    task.actual_duration
-                ),
+                expected_duration=task.expected_duration,
+                actual_duration=task.actual_duration,
             )
 
             task.assigned_to = new_assignee
@@ -136,8 +135,8 @@ class TaskTransferService:
 
         return count
 
-
     @staticmethod
+    @transaction.atomic
     def assign_task_to_user(
         *,
         task,
@@ -154,7 +153,6 @@ class TaskTransferService:
             })
 
         if not TaskTransferService._can_manage_project(
-
             user=performed_by,
             project=project,
         ):
@@ -167,10 +165,19 @@ class TaskTransferService:
                     "cannot be reassigned."
                 )
             })
+
+        if task.status == "DONE":
+            raise ValidationError({
+                "task": (
+                    "Completed tasks cannot be reassigned."
+                )
+            })
+
         UserAvailabilityService.ensure_active(
             new_assignee,
             action="task assignment",
         )
+
         is_project_member = ProjectRole.objects.filter(
             project=project,
             user=new_assignee,
@@ -179,38 +186,59 @@ class TaskTransferService:
         if not is_project_member:
             raise ValidationError({
                 "new_assignee": (
-                    "The selected user is not a member of this project."
+                    "The selected user is not "
+                    "a member of this project."
                 )
             })
-        if task.status == "DONE":
-                raise ValidationError({
-                    "task": (
-                        "Completed tasks cannot be reassigned."
-                    )
-                })
 
         if task.assigned_to_id == new_assignee.id:
-                raise ValidationError({
-                    "new_assignee": (
-                        "This task is already assigned "
-                        "to the selected user."
-                    )
-                })
+            raise ValidationError({
+                "new_assignee": (
+                    "This task is already assigned "
+                    "to the selected user."
+                )
+            })
+
         validate_employee_task_availability(
             employee=new_assignee,
+            project=project,
             due_date=task.due_date,
             expected_duration=task.expected_duration,
-            actual_duration=task.actual_duration,
+            actual_duration=timedelta(0),
         )
 
 
+
+        leave_pause_action = (
+            LeaveTaskAction.objects
+            .select_for_update()
+            .filter(
+                task=task,
+                action="PAUSE_TASK",
+                is_resolved=True,
+                request__status__in=[
+                    "ACTION_REQUIRED",
+                    "PENDING",
+                    "ON_HOLD",
+                    "APPROVED",
+                ],
+            )
+            .order_by("-resolved_at")
+            .first()
+        )
+
         previous_assignee = task.assigned_to
+
 
         task.assigned_to = new_assignee
         task.assignment_state = "ASSIGNED"
+
         task.status = "TODO"
+
         task.start_time = None
         task.end_time = None
+
+        task.actual_duration = timedelta(0)
 
         task.save(
             update_fields=[
@@ -219,9 +247,36 @@ class TaskTransferService:
                 "status",
                 "start_time",
                 "end_time",
+                "actual_duration",
                 "updated_at",
             ]
         )
+
+
+        if leave_pause_action is not None:
+            leave_pause_action.action = "TRANSFER_TASK"
+
+            leave_pause_action.new_assignee = (
+                new_assignee
+            )
+
+            leave_pause_action.resolved_by = (
+                performed_by
+            )
+
+            leave_pause_action.resolved_at = (
+                timezone.now()
+            )
+
+            leave_pause_action.save(
+                update_fields=[
+                    "action",
+                    "new_assignee",
+                    "resolved_by",
+                    "resolved_at",
+                    "updated_at",
+                ]
+            )
 
         create_activity_log(
             user=performed_by,
@@ -270,7 +325,6 @@ class TaskTransferService:
             )
 
         return task
-
     @staticmethod
     def _can_manage_project(
         *,

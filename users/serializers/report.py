@@ -246,7 +246,18 @@ class ResolveLeaveTaskActionSerializer(serializers.Serializer):
 
             attrs["new_assignee"] = None
 
-        elif action in ["PAUSE_TASK", "NO_ACTION"]:
+        elif action == "PAUSE_TASK":
+            if not new_due_date:
+                raise serializers.ValidationError({
+                    "new_due_date": (
+                        "New due date is required when "
+                        "pausing a task for leave."
+                    )
+                })
+
+            attrs["new_assignee"] = None
+
+        elif action == "NO_ACTION":
             attrs["new_assignee"] = None
             attrs["new_due_date"] = None
 

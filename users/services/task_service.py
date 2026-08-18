@@ -9,7 +9,7 @@ from users.errors.exceptions import (
     TaskAlreadyAssigned,
     TechnicalReportMissingError,
 )
-from users.models import ActivityLog, Notification, ProjectRole, RequestForm, Task, TaskDependency, TaskFile, TaskImage, TechnicalReportForm, User
+from users.models import ActivityLog, LeaveTaskAction, Notification, ProjectRole, RequestForm, Task, TaskDependency, TaskFile, TaskImage, TechnicalReportForm, User
 from users.services import UserAvailabilityService
 from users.services.invitationsService import InvitationService
 
@@ -55,12 +55,13 @@ def handle_side_effects(task, user, new_status):
 
 
 def validate_employee_task_availability(
-        *,
+     *,
         employee,
+        project,
         due_date,
         expected_duration,
         actual_duration=None,
-    ):
+        ):
         if due_date is None or expected_duration is None:
             return
 
@@ -72,11 +73,11 @@ def validate_employee_task_availability(
 
         approved_leaves = RequestForm.objects.filter(
             user=employee,
+            project=project,
             request_type="LEAVE",
             status="APPROVED",
             leave_end__gte=timezone.now(),
         ).order_by("leave_start")
-
         now = timezone.now()
 
         for leave in approved_leaves:
@@ -102,7 +103,27 @@ def validate_employee_task_availability(
                         "the approved leave starts."
                     )
                 })
-
+def get_active_leave_pause_action(task):
+    return (
+        LeaveTaskAction.objects
+        .filter(
+            task=task,
+            action="PAUSE_TASK",
+            is_resolved=True,
+            request__status__in=[
+                "ACTION_REQUIRED",
+                "PENDING",
+                "APPROVED",
+                "ON_HOLD",
+            ],
+        )
+        .select_related(
+            "request",
+            "request__user",
+        )
+        .order_by("-resolved_at")
+        .first()
+    )
 
 class TaskService:
 
@@ -151,7 +172,6 @@ class TaskService:
                     ],
                 })
 
-        # task.task_dependencies.all().delete()
         task.is_deleted = True
         task.deleted_at = timezone.now()
         task.deleted_by = user
@@ -232,7 +252,7 @@ class TaskService:
     from django.db import transaction
     from rest_framework.exceptions import ValidationError
 
-
+    @transaction.atomic
     @staticmethod
     def create_task(
             *,
@@ -273,11 +293,12 @@ class TaskService:
                     action="task assignment",
                 )
                 validate_employee_task_availability(
-                    employee=assigned_user,
-                    due_date=due_date,
-                    expected_duration=expected_duration,
-                    actual_duration=actual_duration,
-                )
+                employee=assigned_user,
+                project=project,
+                due_date=due_date,
+                expected_duration=expected_duration,
+                actual_duration=actual_duration,
+            )
                 # ---------------------------------------------------------
             if due_date:
                 now = timezone.now()
@@ -403,6 +424,19 @@ class TaskService:
         dependencies = []
         predecessor_ids = set()
 
+
+
+
+        if task.status != "TODO":
+            raise ValidationError({
+                "detail": (
+                    "Dependencies can only be created "
+                    "before the task has started."
+                ),
+                "code": "DEPENDENCY_ADD_NOT_ALLOWED",
+                "task_id": task.id,
+                "task_status": task.status,
+            })
         for predecessor in dependency_tasks:
             if predecessor.id in predecessor_ids:
                 raise ValidationError({
@@ -427,6 +461,29 @@ class TaskService:
                         "All dependency tasks must belong "
                         "to the same project."
                     )
+                })
+            if (
+                predecessor.due_date
+                and task.due_date
+                and predecessor.due_date > task.due_date
+            ):
+                raise ValidationError({
+                    "detail": (
+                        "The predecessor task due date must be "
+                        "earlier than or equal to the dependent "
+                        "task due date."
+                    ),
+                    "code": "INVALID_DEPENDENCY_DATES",
+                    "predecessor": {
+                        "id": predecessor.id,
+                        "title": predecessor.title,
+                        "due_date": predecessor.due_date,
+                    },
+                    "successor": {
+                        "id": task.id,
+                        "title": task.title,
+                        "due_date": task.due_date,
+                    },
                 })
             if TaskService.creates_circular_dependency(
                 predecessor=predecessor,
@@ -459,23 +516,196 @@ class TaskService:
             dependencies
         )
 
-    """
     @staticmethod
     def update_status(task, user, status_value):
+        allowed_choices = [
+            "TODO",
+            "INPROGRESS",
+            "PAUSED",
+            "REVIEW",
+            "DONE",
+        ]
 
-        allowed = TASK_TRANSITIONS.get(task.status, [])
-        if status_value not in allowed:
+        if status_value not in allowed_choices:
             raise InvalidStatusError()
 
-        if not can_change_status(user, task):
+        transitions = {
+            "TODO": [
+                "INPROGRESS",
+                "DONE",
+            ],
+            "INPROGRESS": [
+                "TODO",
+                "PAUSED",
+                "REVIEW",
+                "DONE",
+            ],
+            "PAUSED": [
+                "INPROGRESS",
+            ],
+            "REVIEW": [],
+            "DONE": [],
+        }
+
+        current_status = task.status
+
+        allowed_transitions = transitions.get(
+            current_status,
+            [],
+        )
+
+        if status_value not in allowed_transitions:
+            raise InvalidStatusError()
+
+        is_project_manager = ProjectRole.objects.filter(
+            project=task.project,
+            user=user,
+            role__in=["ADMIN", "MANAGER"],
+        ).exists()
+
+        is_assignee = task.assigned_to_id == user.id
+
+        if not is_assignee:
             raise PermissionDeniedError()
 
+        if task.is_deleted or task.is_archived:
+            raise InvalidStatusError()
+
+        if current_status == "DONE":
+            raise InvalidStatusError()
+
+        if status_value == "DONE":
+            if not (
+                is_project_manager
+                and is_assignee
+            ):
+                raise InvalidStatusError()
+
+            if task.is_blocked:
+                raise ValidationError({
+                    "detail": (
+                        "This task cannot be completed because "
+                        "it has incomplete dependencies."
+                    ),
+                    "code": "TASK_BLOCKED",
+                })
+
+        now = timezone.now()
+
+        # ==========================================
+        # Resume from PAUSED
+        # ==========================================
+
+        if (
+            current_status == "PAUSED"
+            and status_value == "INPROGRESS"
+        ):
+            leave_pause_action = (
+                get_active_leave_pause_action(task)
+            )
+
+            if leave_pause_action is not None:
+                raise ValidationError({
+                    "detail": (
+                        "This task is paused because of a leave "
+                        "request and cannot be resumed manually."
+                    ),
+                    "code": "TASK_PAUSED_FOR_LEAVE",
+                    "leave_action_id": (
+                        leave_pause_action.id
+                    ),
+                    "leave_request_id": (
+                        leave_pause_action.request_id
+                    ),
+                })
+
+        # ==========================================
+        # Start / Resume
+        # ==========================================
+
+        if status_value == "INPROGRESS":
+            blocking_dependencies = (
+                task.blocking_dependencies
+                .select_related("predecessor")
+            )
+
+            if blocking_dependencies.exists():
+                raise ValidationError({
+                    "detail": (
+                        "This task cannot be started because "
+                        "it has incomplete dependencies."
+                    ),
+                    "code": "TASK_BLOCKED",
+                    "blocked_by": [
+                        {
+                            "dependency_id": dependency.id,
+                            "task_id": dependency.predecessor_id,
+                            "title": dependency.predecessor.title,
+                            "status": dependency.predecessor.status,
+                        }
+                        for dependency
+                        in blocking_dependencies
+                    ],
+                })
+
+            # بداية جلسة عمل جديدة.
+            task.start_time = now
+            task.end_time = None
+
+        # ==========================================
+        # Manual Pause
+        # ==========================================
+
+        if status_value == "PAUSED":
+            if task.start_time:
+                worked_duration = (
+                    now - task.start_time
+                )
+
+                task.actual_duration = (
+                    task.actual_duration
+                    or timedelta(0)
+                ) + worked_duration
+
+            task.start_time = None
+            task.end_time = None
+
+        # ==========================================
+        # Send to Review
+        # ==========================================
+
         if status_value == "REVIEW":
-            validate_review_transition(task)
+            report = TechnicalReportForm.objects.filter(
+                task=task,
+                user=task.assigned_to,
+                status="SUBMITTED",
+            ).order_by(
+                "-created_at"
+            ).first()
+
+            if not report:
+                raise TechnicalReportMissingError()
+
+            if task.start_time:
+                worked_duration = (
+                    now - task.start_time
+                )
+
+                task.actual_duration = (
+                    task.actual_duration
+                    or timedelta(0)
+                ) + worked_duration
+
+                task.start_time = None
+
+            task.end_time = None
 
             managers = User.objects.filter(
                 projectrole__project=task.project,
-                projectrole__role__in=["ADMIN", "MANAGER"],
+                projectrole__role__in=[
+                    "ADMIN",
+                    "MANAGER",
+                ],
             ).distinct()
 
             for manager in managers:
@@ -483,13 +713,46 @@ class TaskService:
                     recipient=manager,
                     notification_type="REPORT_SUBMITTED",
                     title="New Technical Report Submitted",
-                    message=f"Employee {user.username} submitted report for '{task.title}'",
-                    navigation_target=f"/task_details/{task.id}",
+                    message=(
+                        f"Employee "
+                        f"{user.get_full_name() or user.username} "
+                        f"submitted a technical report for "
+                        f"'{task.title}'."
+                    ),
+                    navigation_target=(
+                        f"/task_details/{task.id}"
+                    ),
                 )
 
-        handle_side_effects(task, user, status_value)
+        # ==========================================
+        # Reset to TODO
+        # ==========================================
+
+        if status_value == "TODO":
+            task.start_time = None
+            task.end_time = None
+            task.actual_duration = timedelta(0)
+
+        # ==========================================
+        # Done
+        # ==========================================
+
+        if status_value == "DONE":
+            if task.start_time:
+                worked_duration = (
+                    now - task.start_time
+                )
+
+                task.actual_duration = (
+                    task.actual_duration
+                    or timedelta(0)
+                ) + worked_duration
+
+            task.start_time = None
+            task.end_time = now
 
         task.status = status_value
+
         task.save(
             update_fields=[
                 "status",
@@ -500,9 +763,106 @@ class TaskService:
             ]
         )
 
+        TaskService.refresh_project_status(
+            task.project,
+        )
+
         return task
-    """
+
+
+
     @staticmethod
+    def validate_dependency_due_date(
+        *,
+        task,
+        new_due_date,
+    ):
+        if not new_due_date:
+            return
+
+        invalid_predecessor = (
+            TaskDependency.objects
+            .filter(
+                successor=task,
+                dependency_type="BLOCKS",
+                predecessor__due_date__gt=new_due_date,
+            )
+            .select_related("predecessor")
+            .order_by("predecessor__due_date")
+            .first()
+        )
+
+        if invalid_predecessor:
+            predecessor = (
+                invalid_predecessor.predecessor
+            )
+
+            raise ValidationError({
+                "detail": (
+                    "The task due date cannot be earlier "
+                    "than one of its predecessor tasks."
+                ),
+                "code": "INVALID_DEPENDENCY_DATES",
+                "predecessor": {
+                    "id": predecessor.id,
+                    "title": predecessor.title,
+                    "due_date": (
+                        predecessor.due_date.isoformat()
+                        if predecessor.due_date
+                        else None
+                    ),
+                },
+                "task": {
+                    "id": task.id,
+                    "title": task.title,
+                    "new_due_date": (
+                        new_due_date.isoformat()
+                    ),
+                },
+            })
+
+        invalid_successor = (
+            TaskDependency.objects
+            .filter(
+                predecessor=task,
+                dependency_type="BLOCKS",
+                successor__due_date__lt=new_due_date,
+            )
+            .select_related("successor")
+            .order_by("successor__due_date")
+            .first()
+        )
+
+        if invalid_successor:
+            successor = (
+                invalid_successor.successor
+            )
+
+            raise ValidationError({
+                "detail": (
+                    "The task due date cannot be later "
+                    "than one of the tasks that depend on it."
+                ),
+                "code": "INVALID_DEPENDENCY_DATES",
+                "successor": {
+                    "id": successor.id,
+                    "title": successor.title,
+                    "due_date": (
+                        successor.due_date.isoformat()
+                        if successor.due_date
+                        else None
+                    ),
+                },
+                "task": {
+                    "id": task.id,
+                    "title": task.title,
+                    "new_due_date": (
+                        new_due_date.isoformat()
+                    ),
+                },
+            })
+    """
+        @staticmethod
     def update_status(task, user, status_value):
         allowed_choices = ["TODO", "INPROGRESS", "REVIEW", "DONE"]
         if status_value not in allowed_choices:
@@ -621,6 +981,8 @@ class TaskService:
 
 
 
+    """
+
 
 
 
@@ -633,41 +995,83 @@ class TaskService:
 
 
     @staticmethod
-    def review_technical_report(task, report, manager_user, feedback_text=None, new_status=None, quality=None):
-        if new_status not in ['APPROVED', 'REJECTED']:
-            raise ValidationError({"status": "Status must be APPROVED or REJECTED."})
+    def review_technical_report(
+        task,
+        report,
+        manager_user,
+        feedback_text=None,
+        new_status=None,
+        quality=None,
+    ):
+        if new_status not in [
+            "APPROVED",
+            "REJECTED",
+        ]:
+            raise ValidationError({
+                "status": (
+                    "Status must be APPROVED or REJECTED."
+                )
+            })
 
         is_project_manager = ProjectRole.objects.filter(
             project=task.project,
             user=manager_user,
-            role__in=['ADMIN', 'MANAGER'],
+            role__in=[
+                "ADMIN",
+                "MANAGER",
+            ],
         ).exists()
+
         if not is_project_manager:
             raise PermissionDeniedError()
+
         if report.status != "SUBMITTED":
-                raise ValidationError({
-                    "status": (
-                        "Only submitted reports can be reviewed."
-                    )
-                })
-        if new_status == "APPROVED" and not quality:
+            raise ValidationError({
+                "status": (
+                    "Only submitted reports can be reviewed."
+                )
+            })
+
+        if (
+            new_status == "APPROVED"
+            and not quality
+        ):
             raise ValidationError({
                 "quality": (
                     "Quality evaluation is required."
                 )
             })
+
         now = timezone.now()
 
         if feedback_text:
             manager_entry = {
-                "manager_name": manager_user.get_full_name() or manager_user.username,
+                "manager_name": (
+                    manager_user.get_full_name()
+                    or manager_user.username
+                ),
                 "note": feedback_text,
-                "date": now.strftime("%Y-%m-%d %H:%M"),
+                "date": now.strftime(
+                    "%Y-%m-%d %H:%M"
+                ),
             }
-            current_feedbacks = report.manager_feedbacks or []
-            current_feedbacks.append(manager_entry)
-            report.manager_feedbacks = current_feedbacks
-            report.manager_feedback = feedback_text
+
+            current_feedbacks = (
+                report.manager_feedbacks
+                or []
+            )
+
+            current_feedbacks.append(
+                manager_entry
+            )
+
+            report.manager_feedbacks = (
+                current_feedbacks
+            )
+
+            report.manager_feedback = (
+                feedback_text
+            )
 
         if quality:
             report.quality = quality
@@ -675,49 +1079,95 @@ class TaskService:
         report.status = new_status
         report.save()
 
-        if new_status == 'APPROVED':
+
+        if new_status == "APPROVED":
+
+            if task.start_time:
+                worked_duration = (
+                    now - task.start_time
+                )
+
+                task.actual_duration = (
+                    task.actual_duration
+                    or timedelta(0)
+                ) + worked_duration
+
             task.status = "DONE"
+            task.start_time = None
             task.end_time = now
-            task.actual_duration = task.end_time - task.start_time if task.start_time else None
 
             create_notification(
                 recipient=task.assigned_to,
-                notification_type='SYSTEM_ALERT',
+                notification_type="SYSTEM_ALERT",
                 title="Report accepted",
-                message=f"Your report for task '{task.title}' was accepted.",
-                navigation_target=f"/report_details/{report.id}",
+                message=(
+                    f"Your report for task "
+                    f"'{task.title}' was accepted."
+                ),
+                navigation_target=(
+                    f"/report_details/{report.id}"
+                ),
             )
+
+
         else:
+
             task.status = "INPROGRESS"
+            task.start_time = now
+            task.end_time = None
+
             create_notification(
                 recipient=task.assigned_to,
-                notification_type='REPORT_REJECTED',
+                notification_type="REPORT_REJECTED",
                 title="Report Needs Adjustment",
-                message=f"Your report for task '{task.title}' needs adjustments.",
-                navigation_target=f"/report_details/{report.id}",
+                message=(
+                    f"Your report for task "
+                    f"'{task.title}' needs adjustments."
+                ),
+                navigation_target=(
+                    f"/report_details/{report.id}"
+                ),
             )
+
             create_activity_log(
                 user=manager_user,
                 action="REPORT_REJECTED",
                 action_id=report.id,
                 changes={
-                    "subject_name": manager_user.username,
+                    "subject_name": (
+                        manager_user.username
+                    ),
                     "target_title": task.title,
                     "reason": feedback_text,
                     "is_by_admin": True,
                 },
-)
+            )
 
-        TaskService.refresh_project_status(task.project,)
+        task.save(
+            update_fields=[
+                "status",
+                "start_time",
+                "end_time",
+                "actual_duration",
+                "updated_at",
+            ]
+        )
 
-        task.save()
+        TaskService.refresh_project_status(
+            task.project,
+        )
+
         ActivityLog.objects.create(
             user=manager_user,
             action="REPORT_REVIEWED",
             action_id=report.id,
             changes={
-                "subject_name": manager_user.username,
-                "target_title": f"Report for {task.title}",
+                "subject_name": (
+                    manager_user.username
+                ),
+                "target_title": (
+                    f"Report for {task.title}"
+                ),
                 "note": feedback_text,
                 "status": new_status,
                 "is_by_admin": True,
@@ -728,12 +1178,14 @@ class TaskService:
             "id": report.id,
             "status": report.status,
             "description": report.description,
-            "manager_feedback": report.manager_feedback,
-            "manager_feedbacks": report.manager_feedbacks,
+            "manager_feedback": (
+                report.manager_feedback
+            ),
+            "manager_feedbacks": (
+                report.manager_feedbacks
+            ),
             "task_status": task.status,
         }
-
-
 
 
     @staticmethod
@@ -838,6 +1290,18 @@ class TaskService:
         user,
         dependency_type="BLOCKS",
     ):
+
+
+        if task.status != "TODO":
+            raise ValidationError({
+                "detail": (
+                    "Dependencies can only be added "
+                    "before the task has started."
+                ),
+                "code": "DEPENDENCY_ADD_NOT_ALLOWED",
+                "task_id": task.id,
+                "task_status": task.status,
+            })
         is_project_manager = ProjectRole.objects.filter(
             project=task.project,
             user=user,
@@ -1008,6 +1472,40 @@ class TaskService:
         if task.is_archived:
             return task
 
+
+
+        active_dependents = (
+            TaskDependency.objects
+            .filter(
+                predecessor=task,
+                dependency_type="BLOCKS",
+                successor__is_deleted=False,
+                successor__is_archived=False,
+            )
+            .exclude(
+                successor__status="DONE",
+            )
+            .select_related("successor")
+        )
+
+        if (
+            task.status != "DONE"
+            and active_dependents.exists()
+        ):
+            dependent = active_dependents.first()
+
+            raise ValidationError({
+                "detail": (
+                    "This task cannot be archived because "
+                    "other active tasks still depend on it."
+                ),
+                "code": "TASK_HAS_ACTIVE_DEPENDENTS",
+                "dependent_task": {
+                    "id": dependent.successor.id,
+                    "title": dependent.successor.title,
+                    "status": dependent.successor.status,
+                },
+            })
         task.is_archived = True
 
         task.save(

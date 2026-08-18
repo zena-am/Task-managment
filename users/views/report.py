@@ -380,19 +380,26 @@ class RequestFormViewSet(BaseSubmissionViewSet):
             ).values_list("project_id", flat=True)
 
             if managed_projects.exists():
-                return self.queryset.filter(
+                queryset = self.queryset.filter(
                     Q(project_id__in=managed_projects) | Q(user=user)
                 ).select_related(
                     "project",
                     "user"
                 ).order_by("-created_at")
+            else:
+                queryset = self.queryset.filter(
+                    user=user
+                ).select_related(
+                    "project",
+                    "user",
+                ).order_by("-created_at")
 
-            return self.queryset.filter(
-                user=user
-            ).select_related(
-                "project"
-            ).order_by("-created_at")
+            project_id = self.request.query_params.get("project")
 
+            if project_id:
+                queryset = queryset.filter(project_id=project_id)
+
+            return queryset
         def perform_create(self, serializer):
             FormService.create_request_form(
                 serializer=serializer,
@@ -554,25 +561,25 @@ class BugReportViewSet(BaseSubmissionViewSet):
     def get_queryset(self):
         user = self.request.user
 
-        managed_project_ids = ProjectRole.objects.filter(
+        member_project_ids = ProjectRole.objects.filter(
             user=user,
-            role__in=["ADMIN", "MANAGER"],
         ).values_list(
             "project_id",
             flat=True,
         )
 
         return self.queryset.filter(
-            Q(user=user)
-            | Q(project_id__in=managed_project_ids)
+            Q(project_id__in=member_project_ids)
+            | Q(project__workspace__creator=user)
+            | Q(user=user)
             | Q(task__assigned_to=user)
         ).select_related(
             "project",
+            "project__workspace",
             "user",
             "task",
             "task__assigned_to",
         ).distinct().order_by("-created_at")
-
     def perform_create(self, serializer):
         BugReportService.create_bug(
             serializer=serializer,

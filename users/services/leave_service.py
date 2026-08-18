@@ -1,10 +1,7 @@
-
 from datetime import timedelta
-
 from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
-
 from users.models import LeaveTaskAction, ProjectRole, Task
 from users.services.task_service import TaskService
 from users.services.task_transfer_service import TaskTransferService
@@ -243,10 +240,6 @@ class LeaveRequestService:
 
 
 
-
-
-
-
     @staticmethod
     def analyze_task_for_leave(
         *,
@@ -265,7 +258,19 @@ class LeaveRequestService:
             or timedelta(0)
         )
 
-        remaining = expected - actual
+        if (
+            task.status == "INPROGRESS"
+            and task.start_time
+        ):
+            current_session = (
+                now - task.start_time
+            )
+
+            actual += current_session
+
+        remaining = (
+            expected - actual
+        )
 
         if remaining < timedelta(0):
             remaining = timedelta(0)
@@ -278,43 +283,59 @@ class LeaveRequestService:
             "message": "",
         }
 
+
         if task.status == "DONE":
             result.update({
                 "impact": "COMPLETED",
                 "requires_action": False,
-                "message": "Task is already completed.",
-            })
-
-            return result
-        if task.status == "REVIEW":
-            result.update({
-                "impact": "AWAITING_MANAGER_REVIEW",
-                "requires_action": True,
                 "message": (
-                    "The task report must be reviewed before "
-                    "the leave request can be approved."
+                    "Task is already completed."
                 ),
             })
+
+            return result
+
+        if task.status == "REVIEW":
+            result.update({
+                "impact": (
+                    "AWAITING_MANAGER_REVIEW"
+                ),
+                "requires_action": True,
+                "message": (
+                    "The task report must be reviewed "
+                    "before the leave request can "
+                    "be approved."
+                ),
+            })
+
             return result
 
 
-        if task.due_date < leave_request.leave_start:
+        if (
+            task.due_date
+            < leave_request.leave_start
+        ):
             available_before_leave = max(
                 leave_request.leave_start - now,
                 timedelta(0),
             )
 
             can_finish = (
-                remaining <= available_before_leave
+                remaining
+                <= available_before_leave
             )
 
             result.update({
                 "impact": (
                     "CAN_FINISH_BEFORE_LEAVE"
                     if can_finish
-                    else "NOT_ENOUGH_TIME_BEFORE_LEAVE"
+                    else (
+                        "NOT_ENOUGH_TIME_BEFORE_LEAVE"
+                    )
                 ),
-                "requires_action": not can_finish,
+                "requires_action": (
+                    not can_finish
+                ),
                 "available_duration": (
                     available_before_leave
                 ),
@@ -339,26 +360,32 @@ class LeaveRequestService:
                 "impact": "DUE_DURING_LEAVE",
                 "requires_action": True,
                 "message": (
-                    "Task is due during the leave period."
+                    "Task is due during the "
+                    "leave period."
                 ),
             })
 
             return result
 
+
         available_after_leave = max(
-            task.due_date - leave_request.leave_end,
+            task.due_date
+            - leave_request.leave_end,
             timedelta(0),
         )
 
         can_finish_after_return = (
-            remaining <= available_after_leave
+            remaining
+            <= available_after_leave
         )
 
         result.update({
             "impact": (
                 "CAN_FINISH_AFTER_RETURN"
                 if can_finish_after_return
-                else "NOT_ENOUGH_TIME_AFTER_RETURN"
+                else (
+                    "NOT_ENOUGH_TIME_AFTER_RETURN"
+                )
             ),
             "requires_action": (
                 not can_finish_after_return
@@ -367,20 +394,17 @@ class LeaveRequestService:
                 available_after_leave
             ),
             "message": (
-                "Task can be completed after returning "
-                "from leave."
+                "Task can be completed after "
+                "returning from leave."
                 if can_finish_after_return
                 else (
-                    "There is not enough time after "
-                    "returning from leave."
+                    "There is not enough time "
+                    "after returning from leave."
                 )
             ),
         })
 
         return result
-
-
-
 
 
 
@@ -486,9 +510,12 @@ class LeaveRequestService:
 
         elif action == "PAUSE_TASK":
             LeaveRequestService._pause_task(
-                leave_action=leave_action,
-                task=task,
-            )
+            leave_action=leave_action,
+            task=task,
+            new_due_date=validated_data.get(
+                "new_due_date"
+            ),
+        )
 
         elif action == "NO_ACTION":
             LeaveRequestService._take_no_action(
@@ -559,6 +586,7 @@ class LeaveRequestService:
 
             if leave_action.action == "TRANSFER_TASK":
 
+
                 if (
                     leave_action.new_assignee_id
                     and task.assigned_to_id
@@ -566,18 +594,65 @@ class LeaveRequestService:
                 ):
                     raise ValidationError({
                         "detail": (
-                            f"Task '{task.title}' was reassigned after "
-                            "the leave action and cannot be restored automatically."
+                            f"Task '{task.title}' was reassigned "
+                            f"after the leave action and cannot "
+                            f"be restored automatically."
                         ),
-                        "code": "TASK_CHANGED_AFTER_LEAVE_ACTION",
+                        "code": (
+                            "TASK_CHANGED_AFTER_LEAVE_ACTION"
+                        ),
                         "task_id": task.id,
                     })
 
-                task.assigned_to = leave_action.previous_assignee
+
+                task.assigned_to = (
+                    leave_action.previous_assignee
+                )
+
+                task.assignment_state = (
+                    "ASSIGNED"
+                    if task.assigned_to_id
+                    else "UNASSIGNED_RETURNED"
+                )
+
+                task.due_date = (
+                    leave_action.previous_due_date
+                )
+
+
+                previous_status = (
+                    leave_action.previous_task_status
+                    or "TODO"
+                )
+
+                if (
+                    previous_status == "INPROGRESS"
+                    and task.is_blocked
+                ):
+
+                    task.status = "TODO"
+                    task.start_time = None
+
+                elif previous_status == "INPROGRESS":
+                    task.status = "INPROGRESS"
+
+
+                    task.start_time = timezone.now()
+
+                else:
+                    task.status = previous_status
+                    task.start_time = None
+
+                task.end_time = None
 
                 task.save(
                     update_fields=[
                         "assigned_to",
+                        "assignment_state",
+                        "status",
+                        "due_date",
+                        "start_time",
+                        "end_time",
                         "updated_at",
                     ]
                 )
@@ -597,6 +672,12 @@ class LeaveRequestService:
                         "task_id": task.id,
                     })
 
+                TaskService.validate_dependency_due_date(
+                task=task,
+                new_due_date=(
+                    leave_action.previous_due_date
+                ),
+            )
                 task.due_date = leave_action.previous_due_date
 
                 task.save(
@@ -618,24 +699,43 @@ class LeaveRequestService:
                         "task_id": task.id,
                     })
 
-                task.status = (
+                previous_status = (
                     leave_action.previous_task_status
                     or "TODO"
                 )
 
+                task.due_date = (
+                    leave_action.previous_due_date
+                )
+
+                if (
+                    previous_status == "INPROGRESS"
+                    and not task.is_blocked
+                ):
+                    task.status = "INPROGRESS"
+                    task.start_time = timezone.now()
+
+                elif (
+                    previous_status == "INPROGRESS"
+                    and task.is_blocked
+                ):
+                    task.status = "TODO"
+                    task.start_time = None
+
+                else:
+                    task.status = previous_status
+                    task.start_time = None
+
                 task.save(
                     update_fields=[
                         "status",
+                        "due_date",
+                        "start_time",
                         "updated_at",
                     ]
                 )
 
             leave_action.delete()
-
-
-
-
-
 
 
     @staticmethod
@@ -702,11 +802,27 @@ class LeaveRequestService:
             ):
                 previous_status = "TODO"
 
-            task.status = previous_status
+            if previous_status == "INPROGRESS":
+                if task.is_blocked:
+                    task.status = "TODO"
+                    task.start_time = None
+                else:
+                    task.status = "INPROGRESS"
+
+                    task.start_time = timezone.now()
+
+            elif previous_status == "REVIEW":
+                task.status = "REVIEW"
+                task.start_time = None
+
+            else:
+                task.status = previous_status
+                task.start_time = None
 
             task.save(
                 update_fields=[
                     "status",
+                    "start_time",
                     "updated_at",
                 ]
             )
@@ -743,10 +859,6 @@ class LeaveRequestService:
 
 
 
-
-
-
-
     @staticmethod
     def _transfer_task(
         *,
@@ -757,24 +869,49 @@ class LeaveRequestService:
     ):
         if not new_assignee:
             raise ValidationError({
-                "new_assignee": "New assignee is required."
-            })
-        if leave_action.request.user_id == new_assignee.id:
-            raise ValidationError({
                 "new_assignee": (
-                    "The task cannot be transferred to the employee "
-                    "who is taking leave."
+                    "New assignee is required."
                 )
             })
 
-        if task.assigned_to_id == new_assignee.id:
+        if (
+            leave_action.request.user_id
+            == new_assignee.id
+        ):
+            raise ValidationError({
+                "new_assignee": (
+                    "The task cannot be transferred "
+                    "to the employee who is taking leave."
+                )
+            })
+
+        if (
+            task.assigned_to_id
+            == new_assignee.id
+        ):
             raise ValidationError({
                 "new_assignee": (
                     "The new assignee must be different "
                     "from the current assignee."
                 )
             })
-        leave_action.previous_assignee = task.assigned_to
+
+
+
+        leave_action.previous_assignee = (
+            task.assigned_to
+        )
+
+        leave_action.previous_task_status = (
+            task.status
+        )
+
+        leave_action.previous_due_date = (
+            task.due_date
+        )
+
+
+
         TaskTransferService.assign_task_to_user(
             task=task,
             new_assignee=new_assignee,
@@ -782,11 +919,11 @@ class LeaveRequestService:
             project=task.project,
         )
 
-        leave_action.new_assignee = new_assignee
+        leave_action.new_assignee = (
+            new_assignee
+        )
+
         leave_action.new_due_date = None
-
-
-
 
     @staticmethod
     def _extend_task_due_date(
@@ -821,7 +958,10 @@ class LeaveRequestService:
                 )
             })
         leave_action.previous_due_date = task.due_date
-
+        TaskService.validate_dependency_due_date(
+            task=task,
+            new_due_date=new_due_date,
+        )
         task.due_date = new_due_date
 
 
@@ -841,25 +981,170 @@ class LeaveRequestService:
         *,
         leave_action,
         task,
+        new_due_date,
     ):
+        leave_request = leave_action.request
+
         if task.status == "PAUSED":
             raise ValidationError({
-                "task": "Task is already paused."
+                "task": (
+                    "Task is already paused."
+                )
             })
 
-        leave_action.previous_task_status = task.status
+        if not new_due_date:
+            raise ValidationError({
+                "new_due_date": (
+                    "New due date is required."
+                )
+            })
+
+        if not leave_request.leave_end:
+            raise ValidationError({
+                "leave_end": (
+                    "Leave end date is required."
+                )
+            })
+
+        now = timezone.now()
+
+        if new_due_date <= now:
+            raise ValidationError({
+                "new_due_date": (
+                    "The new due date must be "
+                    "in the future."
+                )
+            })
+
+        if new_due_date <= leave_request.leave_end:
+            raise ValidationError({
+                "new_due_date": (
+                    "The new due date must be after "
+                    "the employee's leave ends."
+                )
+            })
+
+        if (
+            task.due_date
+            and new_due_date <= task.due_date
+        ):
+            raise ValidationError({
+                "new_due_date": (
+                    "The new due date must be later "
+                    "than the current task due date."
+                )
+            })
+
+        expected_duration = (
+            task.expected_duration
+            or timedelta(0)
+        )
+
+        actual_duration = (
+            task.actual_duration
+            or timedelta(0)
+        )
+
+        current_session = timedelta(0)
+
+        if (
+            task.status == "INPROGRESS"
+            and task.start_time
+        ):
+            current_session = (
+                now - task.start_time
+            )
+
+        worked_duration = (
+            actual_duration
+            + current_session
+        )
+
+        remaining_duration = max(
+            expected_duration
+            - worked_duration,
+            timedelta(0),
+        )
+
+        available_after_leave = (
+            new_due_date
+            - leave_request.leave_end
+        )
+
+        if (
+            remaining_duration
+            > available_after_leave
+        ):
+            raise ValidationError({
+                "new_due_date": (
+                    "The selected due date does not "
+                    "provide enough time after the leave "
+                    "to complete the remaining task duration."
+                ),
+                "code": (
+                    "INSUFFICIENT_TIME_AFTER_LEAVE"
+                ),
+                "remaining_hours": round(
+                    remaining_duration.total_seconds()
+                    / 3600,
+                    2,
+                ),
+                "available_hours": round(
+                    available_after_leave.total_seconds()
+                    / 3600,
+                    2,
+                ),
+            })
+
+        leave_action.previous_assignee = (
+            task.assigned_to
+        )
+
+        leave_action.previous_task_status = (
+            task.status
+        )
+
+        leave_action.previous_due_date = (
+            task.due_date
+        )
+
         leave_action.new_assignee = None
-        leave_action.new_due_date = None
+        leave_action.new_due_date = (
+            new_due_date
+        )
+
+        if (
+            task.status == "INPROGRESS"
+            and task.start_time
+        ):
+            task.actual_duration = (
+                task.actual_duration
+                or timedelta(0)
+            ) + (
+                now - task.start_time
+            )
+
+            task.start_time = None
+
+        TaskService.validate_dependency_due_date(
+            task=task,
+            new_due_date=new_due_date,
+        )
 
         task.status = "PAUSED"
+        task.due_date = new_due_date
+        task.end_time = None
 
         task.save(
             update_fields=[
                 "status",
+                "due_date",
+                "start_time",
+                "end_time",
+                "actual_duration",
                 "updated_at",
             ]
         )
-
 
     @staticmethod
     def _take_no_action(

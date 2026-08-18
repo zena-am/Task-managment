@@ -184,35 +184,34 @@ class ReportService:
 
         report.delete()
 
-
     @staticmethod
     def submit_technical_report(report, user):
         task = report.task
 
-        now = timezone.now()
-
-        if task.start_time:
-            duration = now - task.start_time
-            report.duration_time = duration
-            task.actual_duration = duration
-
-
-
 
         if task.assigned_to != user:
             raise BaseAppException(
-    detail="You can only update your own request.",
-    code="REQUEST_UPDATE_NOT_ALLOWED",
-    status_code=403
-)
+                detail="You can only submit a report for your own task.",
+                code="REQUEST_UPDATE_NOT_ALLOWED",
+                status_code=403,
+            )
 
         if task.status != "INPROGRESS":
             raise BaseAppException(
-    detail="Reports can only be submitted while the task is in progress.",
-    code="TASK_NOT_IN_PROGRESS",
-    status_code=400
-)
-        latest_report = task.technical_reports.exclude(id=report.id).order_by("-created_at").first()
+                detail=(
+                    "Reports can only be submitted "
+                    "while the task is in progress."
+                ),
+                code="TASK_NOT_IN_PROGRESS",
+                status_code=400,
+            )
+
+        latest_report = (
+            task.technical_reports
+            .exclude(id=report.id)
+            .order_by("-created_at")
+            .first()
+        )
 
         if latest_report:
             if latest_report.status == "SUBMITTED":
@@ -224,31 +223,66 @@ class ReportService:
                 raise ValidationError(
                     "This task already has an approved report."
                 )
+
         if not report.description:
             raise ValidationError(
                 "Description is required before submitting the report."
             )
+
+        now = timezone.now()
+
+
+
+        if task.start_time:
+            worked_duration = now - task.start_time
+
+            task.actual_duration = (
+                task.actual_duration
+                or timedelta(0)
+            ) + worked_duration
+
+        task.start_time = None
+        task.end_time = None
+
+        report.duration_time = (
+            task.actual_duration
+            or timedelta(0)
+        )
+
         report.status = "SUBMITTED"
+
         report.save(
-                        update_fields=[
-                            "status",
-                            "duration_time",
-                            "updated_at",
-                        ]
-                    )
+            update_fields=[
+                "status",
+                "duration_time",
+                "updated_at",
+            ]
+        )
 
         task.status = "REVIEW"
+
         task.save(
-                        update_fields=[
-                            "status",
-                            "actual_duration",
-                            "updated_at",
-                        ]
-                    )
-        managers = ProjectRole.objects.filter(
-            project=task.project,
-            role__in=["ADMIN", "MANAGER"]
-        ).exclude(user=user).select_related("user")
+            update_fields=[
+                "status",
+                "actual_duration",
+                "start_time",
+                "end_time",
+                "updated_at",
+            ]
+        )
+
+        managers = (
+            ProjectRole.objects
+            .filter(
+                project=task.project,
+                role__in=[
+                    "ADMIN",
+                    "MANAGER",
+                ],
+            )
+            .exclude(user=user)
+            .select_related("user")
+        )
 
         for manager_role in managers:
             Notification.objects.create(
@@ -256,10 +290,14 @@ class ReportService:
                 notification_type="REPORT_SUBMITTED",
                 title="New Technical Report Submitted",
                 message=(
-                    f"Employee {user.get_full_name() or user.username} "
-                    f"has submitted a technical report for the task '{task.title}'."
+                    f"Employee "
+                    f"{user.get_full_name() or user.username} "
+                    f"has submitted a technical report "
+                    f"for the task '{task.title}'."
                 ),
-                navigation_target=f"/task_details/{task.id}"
+                navigation_target=(
+                    f"/task_details/{task.id}"
+                ),
             )
 
         create_activity_log(
@@ -269,13 +307,15 @@ class ReportService:
             changes={
                 "subject_name": user.username,
                 "target_title": task.title,
-                "reason": f"Report for task '{task.title}' was submitted by {user.username}.",
-                "is_by_admin": False
-            }
+                "reason": (
+                    f"Report for task '{task.title}' "
+                    f"was submitted by {user.username}."
+                ),
+                "is_by_admin": False,
+            },
         )
 
         return report
-
 #///////////////////////////////////////////////////////////////////////////////////////////////
 class FormService:
     @staticmethod
@@ -535,6 +575,14 @@ class FormService:
             FormService._validate_leave_review(
                 request_form=request_form,
                 status_value=status_value,
+            )
+        if (
+            request_form.request_type == "LEAVE"
+            and status_value == "REJECTED"
+        ):
+            LeaveRequestService.rollback_leave_actions(
+                leave_request=request_form,
+                user=manager_user,
             )
 
         request_form.status = status_value
