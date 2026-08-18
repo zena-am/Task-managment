@@ -12,7 +12,7 @@ from users.views.profile import ProfileView
 from users.views.report import BugReportViewSet, RequestFormViewSet, TechnicalReportViewSet
 from users.views.searchItems import ProjectSearchViewSet, WorkspaceSearchViewSet
 from users.views.tasks import ArchiveTaskAPIView, ClaimTaskAPIView, ReviewTechnicalReportAPIView, TaskHistoryAPIView, TaskStatusUpdateAPIView, TransferTaskToUser, UnarchiveTaskAPIView
-from users.views.workspaces import LeaveWorkspaceAPIView, TogglePinWorkspaceAPIView, WorkspaceViewSet, WorkspaceWorkingScheduleView
+from users.views.workspaces import LeaveWorkspaceAPIView, TaskWorkingTimeCheckAPIView, TogglePinWorkspaceAPIView, WorkspaceViewSet, WorkspaceWorkingScheduleView
 
 ##[http://127.0.0.1:8000/user/api/docs/](http://127.0.0.1:8000/api/docs/)
 router = DefaultRouter()
@@ -67,6 +67,11 @@ urlpatterns = [
         "api/tasks/<int:task_id>/archive/",
         ArchiveTaskAPIView.as_view(),
     ),
+    path(
+    "tasks/check-working-time/",
+    TaskWorkingTimeCheckAPIView.as_view(),
+    name="task-working-time-check",
+),
     path(
     "projects-without-manager/",
     TransferSystemBot.as_view(),

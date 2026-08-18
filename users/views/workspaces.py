@@ -1,11 +1,18 @@
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.exceptions import PermissionDenied
 from drf_spectacular.utils import extend_schema, extend_schema_view
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import serializers
 
+from users.models import Project
+from users.services.working_time_service import WorkingTimeService
 from users.errors.exceptions import BaseAppException, PermissionDeniedError
 from users.errors.messages.success import success_response
 from users.services.WorkspaceService import WorkspaceServices
@@ -246,3 +253,71 @@ class WorkspaceWorkingScheduleView(APIView):
         return Response(
             serializer.data
         )
+
+
+
+
+
+
+
+
+
+class TaskWorkingTimeCheckAPIView(APIView):
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+
+        project_id = request.data.get("project")
+        expected_hours = request.data.get("expected_hours")
+        due_date = request.data.get("due_date")
+
+        if not project_id or not expected_hours or not due_date:
+            raise serializers.ValidationError({
+                "detail": "project, expected_hours and due_date are required."
+            })
+
+
+        project = Project.objects.get(
+            id=project_id
+        )
+
+
+        available_hours = (
+            WorkingTimeService.get_working_hours_between(
+                workspace=project.workspace,
+                start_datetime=timezone.now(),
+                end_datetime=due_date,
+            )
+        )
+
+
+        valid = (
+            float(expected_hours)
+            <= available_hours
+        )
+        suggested_due_date = None
+
+        if not valid:
+            suggested_due_date = WorkingTimeService.add_working_hours(
+                workspace=project.workspace,
+                start_datetime=timezone.now(),
+                hours=float(expected_hours),
+            )
+
+
+        return Response({
+            "valid": valid,
+            "required_hours": float(expected_hours),
+            "available_hours": round(
+                available_hours,
+                2,
+            ),
+            "message": (
+                "The due date is enough."
+                if valid
+                else
+                "The selected due date is not enough."
+            ),
+            "suggested_due_date": suggested_due_date,
+        })

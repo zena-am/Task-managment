@@ -995,6 +995,44 @@ class LeaveRequestService:
                 "code": "NO_WORKING_TIME_AFTER_LEAVE",
                 "available_hours": available_hours,
             })
+
+
+        expected_duration = (
+            task.expected_duration
+            or timedelta(0)
+        )
+
+        actual_duration = (
+            task.actual_duration
+            or timedelta(0)
+        )
+
+        remaining_duration = max(
+            expected_duration - actual_duration,
+            timedelta(0),
+        )
+
+        remaining_hours = (
+            remaining_duration.total_seconds()
+            / 3600
+        )
+
+        if remaining_hours > available_hours:
+            raise ValidationError({
+                "new_due_date": (
+                    "The selected date does not provide "
+                    "enough working hours after the leave."
+                ),
+                "code": "INSUFFICIENT_WORKING_TIME_AFTER_LEAVE",
+                "required_hours": round(
+                    remaining_hours,
+                    2,
+                ),
+                "available_hours": round(
+                    available_hours,
+                    2,
+                ),
+            })
         leave_action.previous_due_date = task.due_date
         TaskService.validate_dependency_due_date(
             task=task,
