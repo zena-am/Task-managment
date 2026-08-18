@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from ..models import WorkSpace, WorkSpaceMember, Task
+from ..models import WorkSpace, WorkSpaceMember, Task, WorkspaceWorkingSchedule
 from users.models import User
 from django.db.models import Count, Q
 
@@ -14,6 +14,51 @@ class WorkSpaceMemberSerializer(serializers.ModelSerializer):
 
 
 
+class WorkspaceWorkingScheduleSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = WorkspaceWorkingSchedule
+        fields = [
+            "id",
+            "workspace",
+            "working_days",
+            "start_time",
+            "end_time",
+            "timezone",
+            "is_24_hours",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+        ]
+    def validate(self, attrs):
+
+            start = attrs.get(
+                "start_time",
+                self.instance.start_time
+            )
+
+            end = attrs.get(
+                "end_time",
+                self.instance.end_time
+            )
+
+            if (
+                not attrs.get("is_24_hours",
+                False)
+                and start >= end
+            ):
+                raise serializers.ValidationError(
+                    {
+                        "time":
+                        "Start time must be before end time."
+                    }
+                )
+
+            return attrs
 
 
 
@@ -21,7 +66,11 @@ class WorkSpaceSerializer(serializers.ModelSerializer):
         members_details = WorkSpaceMemberSerializer(source="workspacemember_set",many=True,read_only=True)
         # projects = ProjectSerializer(many=True, read_only=True)
         creator = serializers.StringRelatedField(read_only=True)
-
+        working_schedule = (
+            WorkspaceWorkingScheduleSerializer(
+                read_only=True
+            )
+        )
         user_pinned = serializers.SerializerMethodField()
         user_role = serializers.SerializerMethodField()
         is_owner = serializers.SerializerMethodField()
@@ -46,6 +95,7 @@ class WorkSpaceSerializer(serializers.ModelSerializer):
             'stats',
             'permissions',
             'actions',
+            'working_schedule',
         ]
 
         def _get_request_user(self):
@@ -299,3 +349,12 @@ class WorkSpaceListSerializer(serializers.ModelSerializer):
         ).first()
 
         return membership.is_pinned if membership else False
+
+
+
+
+
+
+
+
+

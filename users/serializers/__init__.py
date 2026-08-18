@@ -14,7 +14,8 @@ from .workspace import (
     WorkSpaceSerializer,
     WorkSpaceListSerializer,
     WorkSpaceCreateSerializer,
-    WorkSpaceMemberRoleSerializer
+    WorkSpaceMemberRoleSerializer,
+    WorkspaceWorkingScheduleSerializer
 )
 
 from .project import (

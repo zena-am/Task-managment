@@ -648,13 +648,9 @@ class TaskService:
                     ],
                 })
 
-            # بداية جلسة عمل جديدة.
             task.start_time = now
             task.end_time = None
 
-        # ==========================================
-        # Manual Pause
-        # ==========================================
 
         if status_value == "PAUSED":
             if task.start_time:

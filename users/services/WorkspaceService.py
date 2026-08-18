@@ -2,7 +2,7 @@ from django.db import transaction
 from django.db.models import Case, When, Value, BooleanField
 from django.shortcuts import get_object_or_404
 
-from users.models import ProjectRole, Task, WorkSpace, WorkSpaceMember
+from users.models import ProjectRole, Task, WorkSpace, WorkSpaceMember, WorkspaceWorkingSchedule
 from users.constants import create_activity_log
 from users.errors.exceptions import WorkspaceCannotLeaveAsCreator
 from users.services.invitationsService import InvitationService
@@ -32,6 +32,9 @@ class WorkspaceServices:
             workspace=workspace,
             defaults={"role": "ADMIN", "is_pinned": False},
         )
+        WorkspaceWorkingSchedule.objects.create(
+            workspace=workspace
+)
 
         create_activity_log(user=user, action="WORKSPACE_CREATED", action_id=workspace.id, changes={"target_title": workspace.name, "reason": "Workspace created"})
 

@@ -141,6 +141,52 @@ class WorkSpaceMember(models.Model):
                 models.Index(fields=['role']),
         ]
 
+def default_working_days():
+        return [
+                "MON",
+                "TUE",
+                "WED",
+                "THU",
+                "FRI",]
+
+class WorkspaceWorkingSchedule(models.Model):
+        workspace = models.OneToOneField(
+                WorkSpace,
+                on_delete=models.CASCADE,
+                related_name="working_schedule",
+        )
+
+        working_days = models.JSONField(
+                default=default_working_days,
+                help_text="Working days: MON,TUE,WED,THU,FRI,SAT,SUN",
+)
+
+        start_time = models.TimeField(
+                default="09:00",
+        )
+
+        end_time = models.TimeField(
+                default="17:00",
+        )
+
+        timezone = models.CharField(
+                max_length=50,
+                default="UTC",
+        )
+
+        created_at = models.DateTimeField(
+                auto_now_add=True,
+        )
+
+        updated_at = models.DateTimeField(
+                auto_now=True,
+        )
+
+        is_24_hours = models.BooleanField(
+        default=False,
+        )
+        def __str__(self):
+                return f"{self.workspace.name} schedule"
 class Project(TimeStampedModel):
         STATUS_CHOICES = [
         ('pending', 'Pending'),

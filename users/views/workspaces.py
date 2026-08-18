@@ -3,6 +3,7 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.exceptions import PermissionDenied
 from drf_spectacular.utils import extend_schema, extend_schema_view
 
 from users.errors.exceptions import BaseAppException, PermissionDeniedError
@@ -12,8 +13,11 @@ from users.constants import create_activity_log
 from ..models import User, WorkSpace, WorkSpaceMember
 from ..serializers import WorkSpaceSerializer, WorkSpaceCreateSerializer
 from ..permissions import IsWorkspaceOwnerOrReadOnly
-
-
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from users.models import WorkspaceWorkingSchedule
+from users.serializers import WorkspaceWorkingScheduleSerializer
 @extend_schema_view(
     list=extend_schema(tags=['فضاءات العمل'], summary="عرض فضاءات العمل الخاصة بالمستخدم مرتبة حسب التثبيت"),
     create=extend_schema(tags=['فضاءات العمل'], summary="إنشاء فضاء عمل جديد"),
@@ -184,3 +188,61 @@ class LeaveWorkspaceAPIView(APIView):
             code="WORKSPACE_LEFT",
             data=result,
         ), status=status.HTTP_200_OK)
+
+
+class WorkspaceWorkingScheduleView(APIView):
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, workspace_id):
+
+        schedule = WorkspaceWorkingSchedule.objects.get(
+            workspace_id=workspace_id
+        )
+
+        serializer = WorkspaceWorkingScheduleSerializer(
+            schedule
+        )
+
+        return Response(serializer.data)
+
+
+    def patch(self, request, workspace_id):
+        workspace = WorkSpace.objects.get(
+            id=workspace_id
+        )
+
+        is_owner = (
+            workspace.creator_id == request.user.id
+        )
+
+        is_admin = WorkSpaceMember.objects.filter(
+            workspace=workspace,
+            user=request.user,
+            role="ADMIN",
+        ).exists()
+
+
+        if not (is_owner or is_admin):
+            raise PermissionDenied(
+                "You do not have permission to update workspace schedule."
+            )
+        schedule = WorkspaceWorkingSchedule.objects.get(
+            workspace_id=workspace_id
+        )
+
+        serializer = WorkspaceWorkingScheduleSerializer(
+            schedule,
+            data=request.data,
+            partial=True
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        serializer.save()
+
+        return Response(
+            serializer.data
+        )
