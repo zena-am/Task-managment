@@ -185,6 +185,10 @@ class WorkspaceWorkingSchedule(models.Model):
         is_24_hours = models.BooleanField(
         default=False,
         )
+        weekly_schedule = models.JSONField(
+                default=dict,
+                blank=True,)
+
         def __str__(self):
                 return f"{self.workspace.name} schedule"
 class Project(TimeStampedModel):

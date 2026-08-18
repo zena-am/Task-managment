@@ -5,6 +5,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from users.models import LeaveTaskAction, ProjectRole, Task
 from users.services.task_service import TaskService
 from users.services.task_transfer_service import TaskTransferService
+from users.services.working_time_service import WorkingTimeService
 
 class LeaveRequestService:
     @staticmethod
@@ -315,14 +316,20 @@ class LeaveRequestService:
             task.due_date
             < leave_request.leave_start
         ):
-            available_before_leave = max(
-                leave_request.leave_start - now,
-                timedelta(0),
+            available_before_leave_hours = (
+    WorkingTimeService.get_working_hours_between(
+        workspace=task.project.workspace,
+        start_datetime=now,
+        end_datetime=leave_request.leave_start,
+    )
+)
+
+            remaining_hours = (
+                remaining.total_seconds() / 3600
             )
 
             can_finish = (
-                remaining
-                <= available_before_leave
+                remaining_hours <= available_before_leave_hours
             )
 
             result.update({
@@ -337,8 +344,7 @@ class LeaveRequestService:
                     not can_finish
                 ),
                 "available_duration": (
-                    available_before_leave
-                ),
+                available_before_leave_hours                ),
                 "message": (
                     "Task can be completed before leave."
                     if can_finish
@@ -368,16 +374,23 @@ class LeaveRequestService:
             return result
 
 
-        available_after_leave = max(
-            task.due_date
-            - leave_request.leave_end,
-            timedelta(0),
+        available_after_leave_hours = (
+            WorkingTimeService.get_working_hours_between(
+                workspace=task.project.workspace,
+                start_datetime=leave_request.leave_end,
+                end_datetime=task.due_date,
+            )
+        )
+
+        remaining_hours = (
+            remaining.total_seconds()
+            / 3600
         )
 
         can_finish_after_return = (
-            remaining
-            <= available_after_leave
-        )
+            remaining_hours
+            <= available_after_leave_hours
+)
 
         result.update({
             "impact": (
@@ -391,7 +404,7 @@ class LeaveRequestService:
                 not can_finish_after_return
             ),
             "available_duration": (
-                available_after_leave
+                available_after_leave_hours
             ),
             "message": (
                 "Task can be completed after "
@@ -925,6 +938,13 @@ class LeaveRequestService:
 
         leave_action.new_due_date = None
 
+
+
+
+
+
+
+
     @staticmethod
     def _extend_task_due_date(
         *,
@@ -957,6 +977,24 @@ class LeaveRequestService:
                     "than the current due date."
                 )
             })
+
+        available_hours = (
+            WorkingTimeService.get_working_hours_between(
+                workspace=task.project.workspace,
+                start_datetime=leave_action.request.leave_end,
+                end_datetime=new_due_date,
+            )
+        )
+
+        if available_hours <= 0:
+            raise ValidationError({
+                "new_due_date": (
+                    "The selected date has no available "
+                    "working hours after the leave."
+                ),
+                "code": "NO_WORKING_TIME_AFTER_LEAVE",
+                "available_hours": available_hours,
+            })
         leave_action.previous_due_date = task.due_date
         TaskService.validate_dependency_due_date(
             task=task,
@@ -974,6 +1012,11 @@ class LeaveRequestService:
 
         leave_action.new_due_date = new_due_date
         leave_action.new_assignee = None
+
+
+
+
+
 
 
     @staticmethod
@@ -1066,32 +1109,32 @@ class LeaveRequestService:
             timedelta(0),
         )
 
-        available_after_leave = (
-            new_due_date
-            - leave_request.leave_end
+        available_after_leave_hours = (
+            WorkingTimeService.get_working_hours_between(
+                workspace=task.project.workspace,
+                start_datetime=leave_request.leave_end,
+                end_datetime=new_due_date,
+            )
         )
 
-        if (
-            remaining_duration
-            > available_after_leave
-        ):
+        remaining_hours = (
+            remaining_duration.total_seconds()
+            / 3600
+        )
+
+        if remaining_hours > available_after_leave_hours:
             raise ValidationError({
                 "new_due_date": (
-                    "The selected due date does not "
-                    "provide enough time after the leave "
-                    "to complete the remaining task duration."
+                    "The selected date does not provide "
+                    "enough working hours after the leave."
                 ),
-                "code": (
-                    "INSUFFICIENT_TIME_AFTER_LEAVE"
-                ),
-                "remaining_hours": round(
-                    remaining_duration.total_seconds()
-                    / 3600,
+                "code": "INSUFFICIENT_WORKING_TIME_AFTER_LEAVE",
+                "required_hours": round(
+                    remaining_hours,
                     2,
                 ),
                 "available_hours": round(
-                    available_after_leave.total_seconds()
-                    / 3600,
+                    available_after_leave_hours,
                     2,
                 ),
             })

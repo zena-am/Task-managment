@@ -4,6 +4,7 @@ from django.utils import timezone
 from rest_framework import serializers
 from users.serializers.user import UserSerializer
 from users.services.task_service import TaskService
+from users.services.working_time_service import WorkingTimeService
 from ..models import Project, ProjectRole, Task, TaskDependency,TaskImage,TaskFile, TechnicalReportForm, User
 MAX_IMAGE_SIZE = 5 * 1024 * 1024
 MAX_DOCUMENT_SIZE = 10 * 1024 * 1024
@@ -688,6 +689,86 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
                         "The selected employee is not a project member."
                     )
                 })
+
+
+
+        due_date = attrs.get(
+            "due_date",
+            self.instance.due_date if self.instance else None
+        )
+
+        expected_duration = attrs.get(
+            "expected_duration",
+            self.instance.expected_duration if self.instance else None
+        )
+
+        if due_date and expected_duration and project:
+
+            start_time = (
+                self.instance.start_time
+                if self.instance and self.instance.start_time
+                else timezone.now()
+            )
+
+            available_hours = (
+                WorkingTimeService.get_working_hours_between(
+                    workspace=project.workspace,
+                    start_datetime=start_time,
+                    end_datetime=due_date,
+                )
+            )
+
+            expected_hours = (
+                expected_duration.total_seconds()
+                / 3600
+            )
+
+            if expected_hours > available_hours:
+                raise serializers.ValidationError({
+                        "code": "INSUFFICIENT_WORKING_TIME",
+                        "message": (
+                            f"The selected due date provides "
+                            f"{round(available_hours, 2)} working hours, "
+                            f"but this task requires "
+                            f"{round(expected_hours, 2)} working hours."
+                        ),
+                        "required_hours": round(
+                            expected_hours,
+                            2,
+                        ),
+                        "available_hours": round(
+                            available_hours,
+                            2,
+                        ),
+                    })
+
+
+        if (
+            not attrs.get("due_date")
+            and expected_duration
+            and project
+        ):
+
+            start_time = (
+                self.instance.start_time
+                if self.instance and self.instance.start_time
+                else timezone.now()
+            )
+
+            calculated_due_date = (
+                WorkingTimeService.add_working_hours(
+                    workspace=project.workspace,
+                    start_datetime=start_time,
+                    hours=(
+                        expected_duration.total_seconds()
+                        / 3600
+                    ),
+                )
+            )
+
+            attrs["due_date"] = calculated_due_date
+
+
 
         return attrs
 

@@ -12,7 +12,9 @@ from users.errors.exceptions import (
 from users.models import ActivityLog, LeaveTaskAction, Notification, ProjectRole, RequestForm, Task, TaskDependency, TaskFile, TaskImage, TechnicalReportForm, User
 from users.services import UserAvailabilityService
 from users.services.invitationsService import InvitationService
-
+from users.services import UserAvailabilityService
+from users.services.invitationsService import InvitationService
+from users.services.working_time_service import WorkingTimeService
 TASK_TRANSITIONS = {
         "TODO": ["INPROGRESS"],
         "INPROGRESS": ["REVIEW", "TODO"],
@@ -282,6 +284,21 @@ class TaskService:
             expected_duration = validated_data.get("expected_duration")
             actual_duration = validated_data.get("actual_duration")
 
+
+
+            workspace = project.workspace
+            if not due_date and expected_duration:
+
+                due_date = WorkingTimeService.add_working_hours(
+                    workspace=workspace,
+                    start_datetime=timezone.now(),
+                    hours=(
+                        expected_duration.total_seconds()
+                        / 3600
+                    ),
+                )
+
+                validated_data["due_date"] = due_date
             if project is None:
                 raise ValidationError({
                     "project": "Project is required."
@@ -309,14 +326,30 @@ class TaskService:
                     })
 
                 if expected_duration:
-                    available_time = due_date - now
-                    if expected_duration > available_time:
+                    available_hours = (
+                        WorkingTimeService.get_working_hours_between(
+                            workspace=workspace,
+                            start_datetime=now,
+                            end_datetime=due_date,
+                        )
+                    )
+
+                    expected_hours = (
+                        expected_duration.total_seconds()
+                        / 3600
+                    )
+                    if expected_hours > available_hours:
                         raise ValidationError({
-                            "expected_duration": (
-                                "The expected duration exceeds the remaining "
-                                "time until the due date."
-                            )
-                        })
+            "due_date": (
+                "The selected due date does not provide "
+                "enough working hours for this task."
+            ),
+            "code": (
+                "INSUFFICIENT_WORKING_TIME"
+            ),
+            "required_hours": expected_hours,
+            "available_hours": available_hours,
+        })
 
             task = Task.objects.create(
                 creator=user,
@@ -456,35 +489,43 @@ class TaskService:
                 })
 
             if predecessor.project_id != task.project_id:
-                raise ValidationError({
-                    "dependency_ids": (
-                        "All dependency tasks must belong "
-                        "to the same project."
-                    )
-                })
+                    raise ValidationError({
+                        "dependency_ids": (
+                            "All dependency tasks must belong "
+                            "to the same project."
+                        )
+                    })
             if (
-                predecessor.due_date
-                and task.due_date
-                and predecessor.due_date > task.due_date
-            ):
-                raise ValidationError({
-                    "detail": (
-                        "The predecessor task due date must be "
-                        "earlier than or equal to the dependent "
-                        "task due date."
-                    ),
-                    "code": "INVALID_DEPENDENCY_DATES",
-                    "predecessor": {
-                        "id": predecessor.id,
-                        "title": predecessor.title,
-                        "due_date": predecessor.due_date,
-                    },
-                    "successor": {
-                        "id": task.id,
-                        "title": task.title,
-                        "due_date": task.due_date,
-                    },
-                })
+                    predecessor.due_date
+                    and task.due_date
+                ):
+
+                    available_hours = (
+                        WorkingTimeService.get_working_hours_between(
+                            workspace=task.project.workspace,
+                            start_datetime=predecessor.due_date,
+                            end_datetime=task.due_date,
+                        )
+                    )
+
+                    if available_hours <= 0:
+                        raise ValidationError({
+                            "detail": (
+                                "The dependent task has no available "
+                                "working time after the predecessor task."
+                            ),
+                            "code": "NO_WORKING_TIME_BETWEEN_DEPENDENCIES",
+                            "predecessor": {
+                                "id": predecessor.id,
+                                "title": predecessor.title,
+                                "due_date": predecessor.due_date,
+                            },
+                            "successor": {
+                                "id": task.id,
+                                "title": task.title,
+                                "due_date": task.due_date,
+                            },
+                        })
             if TaskService.creates_circular_dependency(
                 predecessor=predecessor,
                 successor=task,
@@ -1345,26 +1386,32 @@ class TaskService:
             dependency_type == "BLOCKS"
             and predecessor.due_date
             and task.due_date
-            and predecessor.due_date > task.due_date
         ):
-            raise ValidationError({
-                "detail": (
-                    "The predecessor task due date must be "
-                    "earlier than or equal to the dependent task due date."
-                ),
-                "code": "INVALID_DEPENDENCY_DATES",
-                "predecessor": {
-                    "id": predecessor.id,
-                    "title": predecessor.title,
-                    "due_date": predecessor.due_date,
-                },
-                "successor": {
-                    "id": task.id,
-                    "title": task.title,
-                    "due_date": task.due_date,
-                },
-            })
-
+            available_hours = (
+                WorkingTimeService.get_working_hours_between(
+                    workspace=task.project.workspace,
+                    start_datetime=predecessor.due_date,
+                    end_datetime=task.due_date,
+                )
+            )
+            if available_hours <= 0:
+                raise ValidationError({
+            "detail": (
+                "The dependent task has no available "
+                "working time after the predecessor task."
+            ),
+            "code": "NO_WORKING_TIME_BETWEEN_DEPENDENCIES",
+            "predecessor": {
+                "id": predecessor.id,
+                "title": predecessor.title,
+                "due_date": predecessor.due_date,
+            },
+            "successor": {
+                "id": task.id,
+                "title": task.title,
+                "due_date": task.due_date,
+            },
+        })
 
         if TaskDependency.objects.filter(
             predecessor=predecessor,
