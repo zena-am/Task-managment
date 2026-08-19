@@ -706,11 +706,14 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
 
         if due_date and expected_duration and project:
 
-            start_time = (
-                self.instance.start_time
-                if self.instance and self.instance.start_time
-                else timezone.now()
-            )
+
+            if self.instance:
+                start_time = (
+                    self.instance.assigned_at
+                    or self.instance.created_at
+                )
+            else:
+                start_time = timezone.now()
 
             available_hours = (
                 WorkingTimeService.get_working_hours_between(
@@ -751,11 +754,13 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
             and project
         ):
 
-            start_time = (
-                self.instance.start_time
-                if self.instance and self.instance.start_time
-                else timezone.now()
-            )
+            if self.instance:
+                    start_time = (
+                        self.instance.assigned_at
+                        or self.instance.created_at
+                    )
+            else:
+                start_time = timezone.now()
 
             calculated_due_date = (
                 WorkingTimeService.add_working_hours(

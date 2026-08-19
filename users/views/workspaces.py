@@ -17,7 +17,7 @@ from users.errors.exceptions import BaseAppException, PermissionDeniedError
 from users.errors.messages.success import success_response
 from users.services.WorkspaceService import WorkspaceServices
 from users.constants import create_activity_log
-from ..models import User, WorkSpace, WorkSpaceMember
+from ..models import Task, User, WorkSpace, WorkSpaceMember
 from ..serializers import WorkSpaceSerializer, WorkSpaceCreateSerializer
 from ..permissions import IsWorkspaceOwnerOrReadOnly
 from rest_framework.views import APIView
@@ -271,9 +271,18 @@ class TaskWorkingTimeCheckAPIView(APIView):
         project_id = request.data.get("project")
         expected_hours = request.data.get("expected_hours")
         due_date = request.data.get("due_date")
-
-
         due_date = parse_datetime(due_date)
+        task_id = request.data.get("task_id")
+
+        if task_id:
+            task = Task.objects.get(id=task_id)
+
+            start_datetime = (
+                task.assigned_at
+                or task.created_at
+            )
+        else:
+            start_datetime = timezone.now()
 
         if not due_date:
             raise serializers.ValidationError({
@@ -293,7 +302,7 @@ class TaskWorkingTimeCheckAPIView(APIView):
         available_hours = (
             WorkingTimeService.get_working_hours_between(
                 workspace=project.workspace,
-                start_datetime=timezone.now(),
+                start_datetime=start_datetime,
                 end_datetime=due_date,
             )
         )

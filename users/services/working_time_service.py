@@ -43,10 +43,17 @@ class WorkingTimeService:
 
         while current.date() <= end_datetime.date():
 
-            day_name = (
-                current.strftime("%a")
-                .upper()
-            )
+            days = [
+            "MON",
+            "TUE",
+            "WED",
+            "THU",
+            "FRI",
+            "SAT",
+            "SUN",
+        ]
+
+            day_name = days[current.weekday()]
 
 
             day_schedule = (
@@ -152,10 +159,18 @@ class WorkingTimeService:
 
         while remaining > 0:
 
-            day_name = (
-                current.strftime("%a")
-                .upper()
-            )
+
+            days = [
+                "MON",
+                "TUE",
+                "WED",
+                "THU",
+                "FRI",
+                "SAT",
+                "SUN",
+            ]
+
+            day_name = days[current.weekday()]
 
 
             day_schedule = (

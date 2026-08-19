@@ -77,6 +77,7 @@ class TaskTransferService:
         )
 
         count = 0
+        assignment_time = timezone.now()
 
         for task in tasks:
             validate_employee_task_availability(
@@ -85,9 +86,11 @@ class TaskTransferService:
                 due_date=task.due_date,
                 expected_duration=task.expected_duration,
                 actual_duration=task.actual_duration,
+                start_datetime=assignment_time,
             )
 
             task.assigned_to = new_assignee
+            task.assigned_at = assignment_time
             task.assignment_state = "ASSIGNED"
             task.status = "TODO"
             task.start_time = None
@@ -199,6 +202,8 @@ class TaskTransferService:
                     "to the selected user."
                 )
             })
+        assignment_time = timezone.now()
+
 
         validate_employee_task_availability(
             employee=new_assignee,
@@ -206,6 +211,7 @@ class TaskTransferService:
             due_date=task.due_date,
             expected_duration=task.expected_duration,
             actual_duration=timedelta(0),
+            start_datetime=assignment_time,
         )
 
 
@@ -232,8 +238,8 @@ class TaskTransferService:
 
 
         task.assigned_to = new_assignee
+        task.assigned_at = assignment_time
         task.assignment_state = "ASSIGNED"
-
         task.status = "TODO"
 
         task.start_time = None

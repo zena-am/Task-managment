@@ -55,56 +55,81 @@ def handle_side_effects(task, user, new_status):
 
 
 
-
 def validate_employee_task_availability(
-     *,
-        employee,
-        project,
-        due_date,
-        expected_duration,
-        actual_duration=None,
+    *,
+    employee,
+    project,
+    due_date,
+    expected_duration,
+    actual_duration=None,
+    start_datetime=None,
+):
+    if due_date is None or expected_duration is None:
+        return
+
+    actual_duration = actual_duration or timedelta(0)
+
+    remaining_duration = max(
+        expected_duration - actual_duration,
+        timedelta(0),
+    )
+
+    start_time = start_datetime or timezone.now()
+
+    available_duration = WorkingTimeService.get_working_hours_between(
+        workspace=project.workspace,
+        start_datetime=start_time,
+        end_datetime=due_date,
+    )
+
+    approved_leaves = RequestForm.objects.filter(
+        user=employee,
+        project=project,
+        request_type="LEAVE",
+        status="APPROVED",
+        leave_end__gte=start_time,
+    ).order_by("leave_start")
+
+
+    for leave in approved_leaves:
+
+        if leave.leave_start <= start_time <= leave.leave_end:
+            raise ValidationError({
+                "assigned_to": (
+                    "This employee is currently on approved leave "
+                    "and cannot receive new tasks."
+                )
+            })
+
+
+        if (
+            start_time < leave.leave_start < due_date
         ):
-        if due_date is None or expected_duration is None:
-            return
-
-        actual_duration = actual_duration or timedelta(0)
-        remaining_duration = max(
-            expected_duration - actual_duration,
-            timedelta(0),
-        )
-
-        approved_leaves = RequestForm.objects.filter(
-            user=employee,
-            project=project,
-            request_type="LEAVE",
-            status="APPROVED",
-            leave_end__gte=timezone.now(),
-        ).order_by("leave_start")
-        now = timezone.now()
-
-        for leave in approved_leaves:
-            if leave.leave_start <= now <= leave.leave_end:
-                raise ValidationError({
-                    "assigned_to": (
-                        "This employee is currently on approved leave "
-                        "and cannot receive new tasks."
-                    )
-                })
-
-            effective_deadline = min(
-                due_date,
-                leave.leave_start,
+            hours_before_leave = WorkingTimeService.get_working_hours_between(
+                workspace=project.workspace,
+                start_datetime=start_time,
+                end_datetime=leave.leave_start,
             )
 
-            available_duration = effective_deadline - now
+            hours_after_leave = WorkingTimeService.get_working_hours_between(
+                workspace=project.workspace,
+                start_datetime=leave.leave_end,
+                end_datetime=due_date,
+            )
 
-            if due_date >= leave.leave_start and remaining_duration > available_duration:
-                raise ValidationError({
-                    "assigned_to": (
-                        "This employee cannot complete the task before "
-                        "the approved leave starts."
-                    )
-                })
+            available_duration = (
+                hours_before_leave
+                + hours_after_leave
+            )
+
+
+    if remaining_duration.total_seconds() / 3600 > available_duration:
+        raise ValidationError({
+            "assigned_to": (
+                "This employee cannot complete "
+                "the task before the deadline."
+            )
+        })
 def get_active_leave_pause_action(task):
     return (
         LeaveTaskAction.objects
@@ -223,6 +248,7 @@ class TaskService:
 
         task.assigned_to = user
         task.status = "TODO"
+        task.assigned_at = timezone.now()
         task.save(update_fields=["assigned_to","assigned_at", "status", "updated_at"])
 
         managers = User.objects.filter(
@@ -284,10 +310,14 @@ class TaskService:
             expected_duration = validated_data.get("expected_duration")
             actual_duration = validated_data.get("actual_duration")
 
-
+            assignment_start = (
+                    timezone.now()
+                    if assigned_user is not None
+                    else None
+                )
 
             workspace = project.workspace
-            if not due_date and expected_duration:
+            if not due_date and expected_duration :
 
                 due_date = WorkingTimeService.add_working_hours(
                     workspace=workspace,
@@ -315,6 +345,8 @@ class TaskService:
                 due_date=due_date,
                 expected_duration=expected_duration,
                 actual_duration=actual_duration,
+                start_datetime=assignment_start,
+
             )
                 # ---------------------------------------------------------
             if due_date:
@@ -324,12 +356,17 @@ class TaskService:
                     raise ValidationError({
                         "due_date": "Due date cannot be in the past."
                     })
+                assignment_start = (
+                    timezone.now()
+                    if assigned_user is not None
+                    else None
+                )
 
-                if expected_duration:
+                if expected_duration :
                     available_hours = (
                         WorkingTimeService.get_working_hours_between(
                             workspace=workspace,
-                            start_datetime=now,
+                            start_datetime=assignment_start or timezone.now(),
                             end_datetime=due_date,
                         )
                     )
@@ -338,19 +375,20 @@ class TaskService:
                         expected_duration.total_seconds()
                         / 3600
                     )
+
                     if expected_hours > available_hours:
                         raise ValidationError({
-            "due_date": (
-                "The selected due date does not provide "
-                "enough working hours for this task."
-            ),
-            "code": (
-                "INSUFFICIENT_WORKING_TIME"
-            ),
-            "required_hours": expected_hours,
-            "available_hours": available_hours,
-        })
-            now = timezone.now()
+                                    "due_date": (
+                        "The selected due date does not provide "
+                        "enough working hours for this task."
+                    ),
+                    "code": (
+                        "INSUFFICIENT_WORKING_TIME"
+                    ),
+                    "required_hours": expected_hours,
+                    "available_hours": available_hours,
+                })
+                    now = timezone.now()
 
             validated_data.pop(
                 "assigned_at",
