@@ -274,6 +274,17 @@ class TaskWorkingTimeCheckAPIView(APIView):
         due_date = parse_datetime(due_date)
         task_id = request.data.get("task_id")
 
+
+        if not due_date:
+            raise serializers.ValidationError({
+                "due_date": "Invalid datetime format."
+            })
+
+        if timezone.is_naive(due_date):
+            due_date = timezone.make_aware(
+                due_date,
+                timezone.get_current_timezone(),
+            )
         if task_id:
             task = Task.objects.get(id=task_id)
 
