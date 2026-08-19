@@ -32,8 +32,11 @@ class WorkingTimeService:
 
         total_hours = 0
 
-        current = start_datetime
-
+        current = datetime.combine(
+            current.date() + timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=current.tzinfo,
+        )
 
         weekly_schedule = (
             schedule.weekly_schedule
@@ -119,9 +122,12 @@ class WorkingTimeService:
                 )
 
 
-            current += timedelta(days=1)
 
-
+        current = datetime.combine(
+            current.date() + timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=current.tzinfo,
+        )
         return round(
             total_hours,
             2,
