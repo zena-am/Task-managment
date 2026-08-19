@@ -148,46 +148,34 @@ def default_working_days():
                 "WED",
                 "THU",
                 "FRI",]
-
+def default_weekly_schedule():
+        return {
+                        "MON": {"enabled": True, "start": "09:00", "end": "17:00"},
+                        "TUE": {"enabled": True, "start": "09:00", "end": "17:00"},
+                        "WED": {"enabled": True, "start": "09:00", "end": "17:00"},
+                        "THU": {"enabled": True, "start": "09:00", "end": "17:00"},
+                        "FRI": {"enabled": True, "start": "09:00", "end": "17:00"},
+                        "SAT": {"enabled": True, "start": "09:00", "end": "17:00"},
+                        "SUN": {"enabled": True, "start": "09:00", "end": "17:00"},
+                }
 class WorkspaceWorkingSchedule(models.Model):
-        workspace = models.OneToOneField(
-                WorkSpace,
-                on_delete=models.CASCADE,
-                related_name="working_schedule",
-        )
+        workspace = models.OneToOneField(WorkSpace,on_delete=models.CASCADE,related_name="working_schedule",)
 
-        working_days = models.JSONField(
-                default=default_working_days,
-                help_text="Working days: MON,TUE,WED,THU,FRI,SAT,SUN",
-)
+        working_days = models.JSONField(default=default_working_days,help_text="Working days: MON,TUE,WED,THU,FRI,SAT,SUN",)
 
-        start_time = models.TimeField(
-                default="09:00",
-        )
+        start_time = models.TimeField(default="09:00",)
 
-        end_time = models.TimeField(
-                default="17:00",
-        )
+        end_time = models.TimeField(default="17:00",)
 
-        timezone = models.CharField(
-                max_length=50,
-                default="UTC",
-        )
+        timezone = models.CharField(max_length=50,default="UTC",)
 
-        created_at = models.DateTimeField(
-                auto_now_add=True,
-        )
+        created_at = models.DateTimeField(auto_now_add=True,)
 
-        updated_at = models.DateTimeField(
-                auto_now=True,
-        )
+        updated_at = models.DateTimeField(auto_now=True,)
 
-        is_24_hours = models.BooleanField(
-        default=False,
-        )
-        weekly_schedule = models.JSONField(
-                default=dict,
-                blank=True,)
+        is_24_hours = models.BooleanField(default=False,)
+
+        weekly_schedule = models.JSONField(default=default_weekly_schedule,blank=True, )
 
         def __str__(self):
                 return f"{self.workspace.name} schedule"
@@ -272,7 +260,7 @@ class Task(TimeStampedModel):
         description = models.TextField()
         expected_duration = models.DurationField(verbose_name="Expected Duration")
         actual_duration = models.DurationField( null=True,blank=True,default=timedelta(0),verbose_name="Actual Worked Duration")
-
+        assigned_at = models.DateTimeField(null=True,blank=True)
         link = models.URLField(max_length=500, null=True, blank=True)
         due_date = models.DateTimeField()
 

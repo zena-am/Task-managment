@@ -33,19 +33,19 @@ def populate_weekly_schedule(apps, schema_editor):
             "end": "17:00",
         },
         "FRI": {
-             "enabled": True,
-                       "start": "09:00",
-                       "end": "17:00",
-        },
+            "enabled": True,
+            "start": "09:00",
+            "end": "17:00",
+},
         "SAT": {
             "enabled": True,
-                      "start": "09:00",
-                      "end": "17:00",
-        },
+            "start": "09:00",
+            "end": "17:00",
+},
         "SUN": {
-             "enabled": True,
-                       "start": "09:00",
-                       "end": "17:00",
+                "enabled": True,
+                "start": "09:00",
+                "end": "17:00",
         },
     }
 

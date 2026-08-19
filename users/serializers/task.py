@@ -108,6 +108,7 @@ class TaskSerializer(serializers.ModelSerializer):
     class Meta:
         model = Task
         fields = [
+            'assigned_at',
             'blocked_by',
             'is_blocked' ,
             'pause_context',
@@ -577,6 +578,7 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Task
         fields = [
+            'assigned_at',
             'id', 'project', 'title', 'description', 'priority', 'status','dependency_ids',
             'expected_duration', 'link', 'assigned_to', 'image_files',
             'document_files', 'due_date','image_files',

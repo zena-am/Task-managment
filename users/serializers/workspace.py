@@ -28,6 +28,7 @@ class WorkspaceWorkingScheduleSerializer(serializers.ModelSerializer):
             "is_24_hours",
             "created_at",
             "updated_at",
+            "weekly_schedule",
         ]
         read_only_fields = [
             "id",

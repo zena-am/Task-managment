@@ -96,6 +96,7 @@ class TaskTransferService:
             task.save(
                 update_fields=[
                     "assigned_to",
+                    "assigned_at",
                     "assignment_state",
                     "status",
                     "start_time",
@@ -243,6 +244,7 @@ class TaskTransferService:
         task.save(
             update_fields=[
                 "assigned_to",
+                "assigned_at",
                 "assignment_state",
                 "status",
                 "start_time",

@@ -123,7 +123,6 @@ class WorkingTimeService:
 
 
     @staticmethod
-    @staticmethod
     def add_working_hours(
         *,
         workspace,

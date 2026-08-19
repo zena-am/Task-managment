@@ -223,7 +223,7 @@ class TaskService:
 
         task.assigned_to = user
         task.status = "TODO"
-        task.save(update_fields=["assigned_to", "status", "updated_at"])
+        task.save(update_fields=["assigned_to","assigned_at", "status", "updated_at"])
 
         managers = User.objects.filter(
             projectrole__project=task.project,
@@ -350,6 +350,12 @@ class TaskService:
             "required_hours": expected_hours,
             "available_hours": available_hours,
         })
+            now = timezone.now()
+
+            validated_data.pop(
+                "assigned_at",
+                None
+            )
 
             task = Task.objects.create(
                 creator=user,
@@ -359,7 +365,11 @@ class TaskService:
                     if assigned_user is not None
                     else "UNASSIGNED_NEW"
                 ),
+                assigned_at=(now
+                if assigned_user is not None
+                else None),
                 **validated_data,)
+
             for image in image_files:
                 TaskImage.objects.create(
                     task=task,
