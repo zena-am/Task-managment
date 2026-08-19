@@ -46,7 +46,7 @@ DEFAULT_WEEKLY_SCHEDULE = {
 
 def update_weekly_schedule(apps, schema_editor):
     WorkspaceWorkingSchedule = apps.get_model(
-        "your_app_name",
+        "users",
         "WorkspaceWorkingSchedule"
     )
 
