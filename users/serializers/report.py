@@ -405,10 +405,11 @@ class BugReportSerializer(serializers.ModelSerializer):
     def get_linked_tasks(self, obj):
         tasks = Task.objects.filter(
             bug_link__bug=obj,
-        ).select_related(
-            "assigned_to",
             is_deleted=False,
             is_archived=False,
+        ).select_related(
+            "assigned_to",
+
         ).order_by(
             "-created_at",
         )
