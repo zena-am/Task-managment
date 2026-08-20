@@ -3,7 +3,7 @@ import os
 from django.utils import timezone
 from rest_framework import serializers
 from users.serializers.user import UserSerializer
-from users.services.task_service import TaskService
+from users.services.task_service import TaskService, validate_employee_task_availability
 from users.services.working_time_service import WorkingTimeService
 from ..models import Project, ProjectRole, Task, TaskDependency,TaskImage,TaskFile, TechnicalReportForm, User
 MAX_IMAGE_SIZE = 5 * 1024 * 1024
@@ -638,12 +638,14 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
 
         return files
     def validate(self, attrs):
-        project = attrs.get("project")
         parent = attrs.get("parent")
         assigned_to = attrs.get("assigned_to")
         dependencies = attrs.get("dependency_ids", [])
 
-
+        project = attrs.get(
+            "project",
+            self.instance.project if self.instance else None,
+        )
         expected_duration = attrs.get('expected_duration')
         if expected_duration and expected_duration.total_seconds() <= 0:
                     raise serializers.ValidationError({"expected_duration": "it must be greater than 0"})
@@ -703,6 +705,32 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
             "expected_duration",
             self.instance.expected_duration if self.instance else None
         )
+        assignee_changed = (
+            assigned_to is not None
+            and (
+                self.instance is None
+                or self.instance.assigned_to_id != assigned_to.id
+            )
+)
+
+        if assignee_changed and project:
+            validate_employee_task_availability(
+                employee=assigned_to,
+                project=project,
+                due_date=due_date,
+                expected_duration=expected_duration,
+                actual_duration=(
+                    self.instance.actual_duration
+                    if self.instance is not None
+                    else None
+                ),
+                start_datetime=timezone.now(),
+                task_id=(
+                    self.instance.id
+                    if self.instance is not None
+                    else None
+                ),
+            )
 
         if due_date and expected_duration and project:
 

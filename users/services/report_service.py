@@ -451,6 +451,51 @@ class FormService:
             raise ValidationError(
                 "Only pending requests can be updated."
             )
+
+
+
+        if request_form.request_type == "LEAVE":
+            leave_start = serializer.validated_data.get(
+                "leave_start",
+                request_form.leave_start,
+            )
+
+            leave_end = serializer.validated_data.get(
+                "leave_end",
+                request_form.leave_end,
+            )
+
+            project = serializer.validated_data.get(
+                "project",
+                request_form.project,
+            )
+
+            overlapping_leave = RequestForm.objects.filter(
+                user=user,
+                project=project,
+                request_type="LEAVE",
+                status__in=[
+                    "PENDING",
+                    "ACTION_REQUIRED",
+                    "APPROVED",
+                ],
+                leave_start__lt=leave_end,
+                leave_end__gt=leave_start,
+            ).exclude(
+                pk=request_form.pk,
+            ).exists()
+
+            if overlapping_leave:
+                raise ValidationError({
+                    "leave_start": [
+                        (
+                            "You already have a pending, action-required, "
+                            "or approved leave request for this period."
+                        )
+                    ]
+                })
+
+
         request_form = serializer.save()
 
         create_activity_log(

@@ -448,10 +448,8 @@ class BugReportService:
             raise ValidationError({
             "result": "Closing reason is required."
         })
-        if (
-            bug.task_id
-            and bug.task.status != "DONE"
-        ):
+        if bug.task_id and not bug.task.is_deleted and bug.task.status != "DONE":
+
             raise ValidationError({
                 "task": (
                     "This bug is linked to an active task. "
