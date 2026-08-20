@@ -558,7 +558,7 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
     image_files = serializers.ListField(child=serializers.ImageField(), write_only=True, required=False)
     document_files = serializers.ListField(child=serializers.FileField(), write_only=True, required=False)
     due_date = serializers.DateTimeField(
-        input_formats=["%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S%z", "iso-8601"]
+        input_formats=["%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S%z", "iso-8601","%Y-%m-%dT%H:%M:%S"]
     )
     dependency_ids = serializers.PrimaryKeyRelatedField(
         queryset=Task.objects.filter(

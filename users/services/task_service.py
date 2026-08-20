@@ -63,6 +63,7 @@ def validate_employee_task_availability(
     expected_duration,
     actual_duration=None,
     start_datetime=None,
+    task_id=None,
 ):
     if due_date is None or expected_duration is None:
         return
@@ -72,6 +73,39 @@ def validate_employee_task_availability(
     remaining_duration = max(
         expected_duration - actual_duration,
         timedelta(0),
+    )
+    existing_tasks = Task.objects.filter(
+        assigned_to=employee,
+        project=project,
+        is_deleted=False,
+        is_archived=False,
+    ).exclude(
+        status="DONE"
+    )
+    if task_id:
+            existing_tasks = existing_tasks.exclude(
+                id=task_id
+            )
+
+    busy_duration = timedelta(0)
+
+    for existing_task in existing_tasks:
+        busy_duration += max(
+            (
+                existing_task.expected_duration
+                or timedelta(0)
+            )
+            -
+            (
+                existing_task.actual_duration
+                or timedelta(0)
+            ),
+            timedelta(0),
+        )
+
+
+    total_required_duration = (
+        busy_duration + remaining_duration
     )
 
     start_time = start_datetime or timezone.now()
@@ -122,14 +156,32 @@ def validate_employee_task_availability(
                 + hours_after_leave
             )
 
-
-    if remaining_duration.total_seconds() / 3600 > available_duration:
+    if (
+        total_required_duration.total_seconds() / 3600
+        > available_duration
+    ):
         raise ValidationError({
             "assigned_to": (
-                "This employee cannot complete "
-                "the task before the deadline."
-            )
+                "This employee does not have enough "
+                "available working time."
+            ),
+            "required_hours": round(
+                total_required_duration.total_seconds() / 3600,
+                2,
+            ),
+            "available_hours": round(
+                available_duration,
+                2,
+            ),
         })
+
+
+
+
+
+
+
+
 def get_active_leave_pause_action(task):
     return (
         LeaveTaskAction.objects
