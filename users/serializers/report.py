@@ -407,6 +407,8 @@ class BugReportSerializer(serializers.ModelSerializer):
             bug_link__bug=obj,
         ).select_related(
             "assigned_to",
+            is_deleted=False,
+            is_archived=False,
         ).order_by(
             "-created_at",
         )
