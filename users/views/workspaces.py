@@ -15,7 +15,10 @@ from rest_framework import serializers
 from django.utils.dateparse import parse_datetime
 from users.models import Project
 from users.services.working_time_service import WorkingTimeService
-from users.services.task_service import calculate_employee_task_availability
+from users.services.task_service import (
+    calculate_employee_task_availability,
+    calculate_workspace_task_schedule,
+)
 from users.errors.exceptions import BaseAppException, PermissionDeniedError
 from users.errors.messages.success import success_response
 from users.services.WorkspaceService import WorkspaceServices
@@ -281,11 +284,6 @@ class TaskWorkingTimeCheckAPIView(APIView):
                 "project": "Project is required."
             })
 
-        if not employee_id:
-            raise serializers.ValidationError({
-                "employee": "Employee is required."
-            })
-
         if expected_hours in [None, ""]:
             raise serializers.ValidationError({
                 "expected_hours": "Expected hours are required."
@@ -316,35 +314,70 @@ class TaskWorkingTimeCheckAPIView(APIView):
             )
 
         project = get_object_or_404(Project, id=project_id)
-        employee = get_object_or_404(User, id=employee_id)
 
         actual_duration = timedelta(0)
         if task_id:
             task = get_object_or_404(Task, id=task_id)
             actual_duration = task.actual_duration or timedelta(0)
 
-        result = calculate_employee_task_availability(
-            employee=employee,
-            project=project,
-            due_date=due_date,
-            expected_duration=timedelta(hours=expected_hours),
-            actual_duration=actual_duration,
-            start_datetime=timezone.now(),
-            task_id=task_id,
-            include_suggestion=True,
-        )
+        if employee_id:
+            employee = get_object_or_404(User, id=employee_id)
+            result = calculate_employee_task_availability(
+                employee=employee,
+                project=project,
+                due_date=due_date,
+                expected_duration=timedelta(hours=expected_hours),
+                actual_duration=actual_duration,
+                start_datetime=timezone.now(),
+                task_id=task_id,
+                include_suggestion=True,
+            )
+            message = "The selected due date is feasible."
+            if not result["valid"]:
+                if result.get("reason") == "DUE_DATE_OUTSIDE_WORKING_SCHEDULE":
+                    message = (
+                        "The selected due date is outside the workspace working "
+                        "schedule."
+                    )
+                else:
+                    message = (
+                        "The selected due date is not feasible for this employee "
+                        "after considering workspace workload and project leave periods."
+                    )
+            elif result.get("deadline_during_leave"):
+                message = (
+                    "The deadline falls during approved project leave, but the task "
+                    "can still be completed within the available working time."
+                )
+        else:
+            result = calculate_workspace_task_schedule(
+                project=project,
+                due_date=due_date,
+                expected_duration=timedelta(hours=expected_hours),
+                start_datetime=timezone.now(),
+            )
+            result.setdefault("workspace_remaining_workload_hours", 0.0)
+            result.setdefault("deadline_during_leave", False)
+            result.setdefault("approved_leave_intervals", [])
+            result.setdefault("pending_leave_warnings", [])
+            result.setdefault("affected_tasks", [])
+            result.setdefault("existing_conflicts", [])
+            result.setdefault("candidate_valid", result["valid"])
 
-        message = "The selected due date is feasible."
-        if not result["valid"]:
-            message = (
-                "The selected due date is not feasible for this employee "
-                "after considering workspace workload and project leave periods."
-            )
-        elif result.get("deadline_during_leave"):
-            message = (
-                "The deadline falls during approved project leave, but the task "
-                "can still be completed within the available working time."
-            )
+            if result["valid"]:
+                message = (
+                    "The selected due date matches the workspace working schedule. "
+                    "Employee capacity will be checked after assignment."
+                )
+            elif result.get("reason") == "DUE_DATE_OUTSIDE_WORKING_SCHEDULE":
+                message = (
+                    "The selected due date is outside the workspace working schedule."
+                )
+            else:
+                message = (
+                    "The selected due date does not provide enough workspace working "
+                    "hours for this task."
+                )
 
         return Response({
             "valid": result["valid"],

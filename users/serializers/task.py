@@ -3,7 +3,11 @@ import os
 from django.utils import timezone
 from rest_framework import serializers
 from users.serializers.user import UserSerializer
-from users.services.task_service import TaskService, validate_employee_task_availability
+from users.services.task_service import (
+    TaskService,
+    validate_employee_task_availability,
+    validate_workspace_task_schedule,
+)
 from users.services.working_time_service import WorkingTimeService
 from ..models import Project, ProjectRole, Task, TaskDependency,TaskImage,TaskFile, TechnicalReportForm, User
 MAX_IMAGE_SIZE = 5 * 1024 * 1024
@@ -722,6 +726,19 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
                 ]
             )
         )
+
+        if (
+            availability_changed
+            and project
+            and due_date
+            and expected_duration
+        ):
+            validate_workspace_task_schedule(
+                project=project,
+                due_date=due_date,
+                expected_duration=expected_duration,
+                start_datetime=timezone.now(),
+            )
 
         if (
             availability_changed

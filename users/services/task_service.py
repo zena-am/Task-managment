@@ -61,6 +61,138 @@ def _duration_hours(value):
     return max(value.total_seconds() / 3600, 0.0)
 
 
+def calculate_workspace_task_schedule(
+    *,
+    project,
+    due_date,
+    expected_duration,
+    start_datetime=None,
+):
+    """Validate only workspace schedule constraints for a task.
+
+    This contains no employee workload or leave logic. It is therefore safe
+    to use when the task is still unassigned.
+    """
+    start_datetime = start_datetime or timezone.now()
+    required_hours = round(_duration_hours(expected_duration), 2)
+
+    if due_date is None:
+        return {
+            "valid": False,
+            "reason": "DUE_DATE_REQUIRED",
+            "required_hours": required_hours,
+            "available_hours": 0.0,
+            "deficit_hours": required_hours,
+            "suggested_due_date": None,
+            "schedule_only": True,
+        }
+
+    if due_date <= start_datetime:
+        return {
+            "valid": False,
+            "reason": "DUE_DATE_NOT_IN_FUTURE",
+            "required_hours": required_hours,
+            "available_hours": 0.0,
+            "deficit_hours": required_hours,
+            "suggested_due_date": None,
+            "schedule_only": True,
+        }
+
+    schedule_status = WorkingTimeService.get_deadline_schedule_status(
+        workspace=project.workspace,
+        value=due_date,
+    )
+
+    available_hours = WorkingTimeService.get_working_hours_between(
+        workspace=project.workspace,
+        start_datetime=start_datetime,
+        end_datetime=due_date,
+    )
+
+    reason = None
+    if not schedule_status["valid"]:
+        reason = "DUE_DATE_OUTSIDE_WORKING_SCHEDULE"
+    elif required_hours > available_hours:
+        reason = "INSUFFICIENT_WORKING_TIME"
+
+    valid = reason is None
+    deficit = max(required_hours - available_hours, 0.0)
+
+    suggested_due_date = None
+    if not valid and expected_duration is not None:
+        try:
+            suggested_due_date = WorkingTimeService.add_working_hours(
+                workspace=project.workspace,
+                start_datetime=start_datetime,
+                hours=required_hours,
+            )
+        except ValueError:
+            suggested_due_date = None
+
+    return {
+        "valid": valid,
+        "reason": reason,
+        "required_hours": required_hours,
+        "remaining_required_hours": required_hours,
+        "available_hours": round(available_hours, 2),
+        "deficit_hours": round(deficit, 2),
+        "suggested_due_date": suggested_due_date,
+        "schedule_only": True,
+        "schedule_day": schedule_status.get("day"),
+        "schedule_start": schedule_status.get("start"),
+        "schedule_end": schedule_status.get("end"),
+    }
+
+
+def validate_workspace_task_schedule(
+    *,
+    project,
+    due_date,
+    expected_duration,
+    start_datetime=None,
+):
+    result = calculate_workspace_task_schedule(
+        project=project,
+        due_date=due_date,
+        expected_duration=expected_duration,
+        start_datetime=start_datetime,
+    )
+
+    if result["valid"]:
+        return result
+
+    if result["reason"] == "DUE_DATE_NOT_IN_FUTURE":
+        message = "Due date must be in the future."
+    elif result["reason"] == "DUE_DATE_OUTSIDE_WORKING_SCHEDULE":
+        day = result.get("schedule_day") or "selected day"
+        start = result.get("schedule_start")
+        end = result.get("schedule_end")
+        if start and end:
+            message = (
+                f"The selected due date is outside the workspace working "
+                f"schedule for {day} ({start}-{end})."
+            )
+        else:
+            message = (
+                "The selected due date falls on a non-working day in the "
+                "workspace weekly schedule."
+            )
+    else:
+        message = (
+            "The selected due date does not provide enough workspace "
+            "working hours for this task."
+        )
+
+    raise ValidationError({
+        "due_date": message,
+        "code": result["reason"],
+        "required_hours": result["required_hours"],
+        "available_hours": result["available_hours"],
+        "deficit_hours": result["deficit_hours"],
+        "suggested_due_date": result.get("suggested_due_date"),
+    })
+
+
 def get_task_remaining_duration(task, *, now=None):
     """Return only the work that is still required for a task."""
     now = now or timezone.now()
@@ -612,6 +744,22 @@ def calculate_employee_task_availability(
             "deadline_during_leave": False,
         }
 
+    workspace_check = calculate_workspace_task_schedule(
+        project=project,
+        due_date=due_date,
+        expected_duration=expected_duration,
+        start_datetime=start_datetime,
+    )
+    if workspace_check["reason"] == "DUE_DATE_OUTSIDE_WORKING_SCHEDULE":
+        return {
+            **workspace_check,
+            "affected_tasks": [],
+            "pending_leave_warnings": [],
+            "deadline_during_leave": False,
+            "workspace_remaining_workload_hours": 0.0,
+            "existing_conflicts": [],
+        }
+
     result = _calculate_task_availability_once(
         employee=employee,
         project=project,
@@ -761,6 +909,18 @@ def validate_employee_task_availability(
         raise ValidationError({
             "due_date": "Due date must be in the future.",
             "code": result["reason"],
+        })
+
+    if result["reason"] == "DUE_DATE_OUTSIDE_WORKING_SCHEDULE":
+        raise ValidationError({
+            "due_date": (
+                "The selected due date is outside the workspace working "
+                "schedule."
+            ),
+            "code": result["reason"],
+            "required_hours": result.get("required_hours", 0),
+            "available_hours": result.get("available_hours", 0),
+            "deficit_hours": result.get("deficit_hours", 0),
         })
 
     message = (
@@ -983,61 +1143,34 @@ class TaskService:
                     "project": "Project is required."
                 })
 
+            if due_date and expected_duration:
+                validate_workspace_task_schedule(
+                    project=project,
+                    due_date=due_date,
+                    expected_duration=expected_duration,
+                    start_datetime=timezone.now(),
+                )
+
             if assigned_user is not None:
                 UserAvailabilityService.ensure_active(
                     assigned_user,
                     action="task assignment",
                 )
                 validate_employee_task_availability(
-                employee=assigned_user,
-                project=project,
-                due_date=due_date,
-                expected_duration=expected_duration,
-                actual_duration=actual_duration,
-                start_datetime=assignment_start,
+                    employee=assigned_user,
+                    project=project,
+                    due_date=due_date,
+                    expected_duration=expected_duration,
+                    actual_duration=actual_duration,
+                    start_datetime=assignment_start,
+                )
 
-            )
-                # ---------------------------------------------------------
             if due_date:
                 now = timezone.now()
-
                 if due_date < now:
                     raise ValidationError({
                         "due_date": "Due date cannot be in the past."
                     })
-                assignment_start = (
-                    timezone.now()
-                    if assigned_user is not None
-                    else None
-                )
-
-                if expected_duration :
-                    available_hours = (
-                        WorkingTimeService.get_working_hours_between(
-                            workspace=workspace,
-                            start_datetime=assignment_start or timezone.now(),
-                            end_datetime=due_date,
-                        )
-                    )
-
-                    expected_hours = (
-                        expected_duration.total_seconds()
-                        / 3600
-                    )
-
-                    if expected_hours > available_hours:
-                        raise ValidationError({
-                                    "due_date": (
-                        "The selected due date does not provide "
-                        "enough working hours for this task."
-                    ),
-                    "code": (
-                        "INSUFFICIENT_WORKING_TIME"
-                    ),
-                    "required_hours": expected_hours,
-                    "available_hours": available_hours,
-                })
-                    now = timezone.now()
 
             validated_data.pop(
                 "assigned_at",

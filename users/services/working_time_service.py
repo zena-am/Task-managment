@@ -110,6 +110,74 @@ class WorkingTimeService:
         return intervals
 
     @staticmethod
+    def get_deadline_schedule_status(*, workspace, value):
+        """Return whether a deadline falls inside the workspace schedule.
+
+        This is intentionally independent from employee availability. It is
+        used for both assigned and unassigned tasks so an unassigned task
+        cannot bypass the weekly schedule rules.
+        """
+        if value is None:
+            return {
+                "valid": False,
+                "reason": "DUE_DATE_REQUIRED",
+                "day": None,
+                "start": None,
+                "end": None,
+            }
+
+        local_value = WorkingTimeService._as_workspace_datetime(
+            workspace=workspace,
+            value=value,
+        )
+        schedule = workspace.working_schedule
+
+        if schedule.is_24_hours:
+            return {
+                "valid": True,
+                "reason": None,
+                "day": WorkingTimeService.DAYS[local_value.weekday()],
+                "start": "00:00",
+                "end": "23:59",
+            }
+
+        day_name = WorkingTimeService.DAYS[local_value.weekday()]
+        day_schedule = (schedule.weekly_schedule or {}).get(day_name) or {}
+
+        if not day_schedule.get("enabled"):
+            return {
+                "valid": False,
+                "reason": "DUE_DATE_ON_NON_WORKING_DAY",
+                "day": day_name,
+                "start": day_schedule.get("start"),
+                "end": day_schedule.get("end"),
+            }
+
+        start_text = day_schedule.get("start")
+        end_text = day_schedule.get("end")
+        if not start_text or not end_text:
+            return {
+                "valid": False,
+                "reason": "WORKING_SCHEDULE_INCOMPLETE",
+                "day": day_name,
+                "start": start_text,
+                "end": end_text,
+            }
+
+        start_time = datetime.strptime(start_text, "%H:%M").time()
+        end_time = datetime.strptime(end_text, "%H:%M").time()
+        local_time = local_value.time().replace(tzinfo=None)
+
+        valid = start_time <= local_time <= end_time
+        return {
+            "valid": valid,
+            "reason": None if valid else "DUE_DATE_OUTSIDE_WORKING_HOURS",
+            "day": day_name,
+            "start": start_text,
+            "end": end_text,
+        }
+
+    @staticmethod
     def get_working_hours_between(
         *,
         workspace,
