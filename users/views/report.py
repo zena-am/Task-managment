@@ -21,6 +21,12 @@ from drf_spectacular.utils import (extend_schema,extend_schema_view,OpenApiExamp
 from drf_spectacular.types import OpenApiTypes
 from users.services.leave_service import LeaveRequestService
 from users.serializers.report import BugToTaskSerializer
+from rest_framework.parsers import (
+    MultiPartParser,
+    FormParser,
+    JSONParser,
+)
+
 @extend_schema_view(
 
     list=extend_schema(
@@ -553,7 +559,10 @@ class RequestFormViewSet(BaseSubmissionViewSet):
 
 class BugReportViewSet(BaseSubmissionViewSet):
     permission_classes = [IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [    MultiPartParser,
+        FormParser,
+        JSONParser,]
+
 
     queryset = BugReportForm.objects.all()
     serializer_class = BugReportSerializer
