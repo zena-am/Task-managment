@@ -276,7 +276,6 @@ class TaskWorkingTimeCheckAPIView(APIView):
         due_date = parse_datetime(due_date)
         task_id = request.data.get("task_id")
         employee_id = request.data.get("employee")
-        employee = User.objects.get(id=employee_id)
 
 
 
@@ -374,14 +373,7 @@ class TaskWorkingTimeCheckAPIView(APIView):
         )
         import logging
 
-        logger = logging.getLogger(__name__)
 
-        logger.warning(
-            "workspace=%s busy=%s leave=%s",
-            workspace_hours,
-            busy_hours,
-            leave_hours
-        )
 
         for leave in approved_leaves:
             leave_start = max(
@@ -400,7 +392,14 @@ class TaskWorkingTimeCheckAPIView(APIView):
                     start_datetime=leave_start,
                     end_datetime=leave_end,
                 )
+        logger = logging.getLogger(__name__)
 
+        logger.warning(
+            "workspace=%s busy=%s leave=%s",
+            workspace_hours,
+            busy_hours,
+            leave_hours
+        )
         raw_available_hours = (
             workspace_hours
             - busy_hours
