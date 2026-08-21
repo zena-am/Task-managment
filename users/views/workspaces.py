@@ -364,11 +364,13 @@ class TaskWorkingTimeCheckAPIView(APIView):
         leave_hours = 0
 
 
+
         approved_leaves = RequestForm.objects.filter(
             user=employee,
-            project=project,
             request_type="LEAVE",
             status="APPROVED",
+            leave_end__gte=start_datetime,
+            leave_start__lte=due_date,
         )
         import logging
 
