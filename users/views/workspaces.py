@@ -400,11 +400,22 @@ class TaskWorkingTimeCheckAPIView(APIView):
                     start_datetime=leave_start,
                     end_datetime=leave_end,
                 )
-        available_hours = (
+
+        raw_available_hours = (
             workspace_hours
             - busy_hours
             - leave_hours
-)
+        )
+
+        available_hours = max(
+            raw_available_hours,
+            0,
+        )
+
+        overbooked_hours = max(
+            -raw_available_hours,
+            0,
+        )
 
 
 
@@ -425,17 +436,24 @@ class TaskWorkingTimeCheckAPIView(APIView):
 
 
         return Response({
-            "valid": valid,
-            "required_hours": float(expected_hours),
-            "available_hours": round(
-                available_hours,
-                2,
-            ),
-            "message": (
+                "valid": float(expected_hours) <= raw_available_hours,
+
+                "required_hours": float(expected_hours),
+
+                "available_hours": round(
+                    available_hours,
+                    2,
+                ),
+
+                "overbooked_hours": round(
+                    overbooked_hours,
+                    2,
+                ),
+                "message": (
                 "The due date is enough."
                 if valid
                 else
                 "The selected due date is not enough."
             ),
             "suggested_due_date": suggested_due_date,
-        })
+            })
