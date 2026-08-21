@@ -616,6 +616,15 @@ class FormService:
                 )
             })
 
+        if (
+            request_form.request_type == "LEAVE"
+            and status_value == "APPROVED"
+        ):
+            LeaveRequestService.analyze_leave_impact(
+                leave_request=request_form,
+                manager_user=manager_user,
+            )
+
         if request_form.request_type == "LEAVE":
             FormService._validate_leave_review(
                 request_form=request_form,
@@ -680,7 +689,13 @@ class FormService:
         request_form,
         status_value,
     ):
-        if status_value not in ["APPROVED", "REJECTED"]:
+        if status_value == "REJECTED":
+            # Rejecting a leave request does not require impact analysis.
+            # Any leave actions already applied by the current workflow are
+            # rolled back by review_request_form().
+            return
+
+        if status_value != "APPROVED":
             return
 
         has_active_tasks = Task.objects.filter(
@@ -697,13 +712,25 @@ class FormService:
         if has_active_tasks and not analysis_exists:
             raise ValidationError({
                 "leave_analysis": (
-                    "Leave impact must be analyzed before "
-                    "approving or rejecting this request."
+                    "Leave impact must be analyzed before approving "
+                    "this request."
                 )
             })
 
-        if status_value != "APPROVED":
-            return
+        pending_report_reviews_exist = LeaveTaskAction.objects.filter(
+            request=request_form,
+            task__status="REVIEW",
+            requires_action=True,
+            is_resolved=False,
+        ).exists()
+
+        if pending_report_reviews_exist:
+            raise ValidationError({
+                "technical_reports": (
+                    "All tasks awaiting technical report review must be "
+                    "approved or rejected before approving the leave request."
+                )
+            })
 
         unresolved_actions_exist = LeaveTaskAction.objects.filter(
             request=request_form,

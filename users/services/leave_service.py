@@ -3,7 +3,13 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from users.models import LeaveTaskAction, ProjectRole, Task
-from users.services.task_service import TaskService
+from users.services.task_service import (
+    TaskService,
+    calculate_employee_schedule,
+    calculate_safe_assignable_hours,
+    get_task_remaining_duration,
+    validate_employee_task_availability,
+)
 from users.services.task_transfer_service import TaskTransferService
 from users.services.working_time_service import WorkingTimeService
 
@@ -65,9 +71,7 @@ class LeaveRequestService:
 
         if leave_request.leave_end <= leave_request.leave_start:
             raise ValidationError({
-                "leave_end": (
-                    "Leave end must be later than leave start."
-                )
+                "leave_end": "Leave end must be later than leave start."
             })
 
         if leave_request.status in ["APPROVED", "REJECTED"]:
@@ -78,45 +82,134 @@ class LeaveRequestService:
                 )
             })
 
-        tasks = Task.objects.filter(
-            project=leave_request.project,
-            assigned_to=leave_request.user,
-            is_deleted=False,
-            is_archived=False,
-        ).select_related(
-            "assigned_to",
-            "project",
-        ).order_by("due_date")
+        now = timezone.now()
+        workspace = leave_request.project.workspace
+
+        # Baseline: all of the employee's workload in this workspace.
+        baseline_schedule = calculate_employee_schedule(
+            employee=leave_request.user,
+            workspace=workspace,
+            start_datetime=now,
+            end_datetime=leave_request.leave_end,
+        )
+
+        # Impact schedule: same workload, but the current project leave is
+        # temporarily treated as approved. Other projects remain usable.
+        leave_schedule = calculate_employee_schedule(
+            employee=leave_request.user,
+            workspace=workspace,
+            start_datetime=now,
+            end_datetime=leave_request.leave_end,
+            extra_leaves=[leave_request],
+        )
+
+        current_project_tasks = list(
+            Task.objects.filter(
+                project=leave_request.project,
+                assigned_to=leave_request.user,
+                is_deleted=False,
+                is_archived=False,
+            ).select_related("assigned_to", "project").order_by("due_date")
+        )
+
+        existing_actions = {
+            action.task_id: action
+            for action in LeaveTaskAction.objects.filter(
+                request=leave_request,
+            ).select_related("task", "new_assignee", "resolved_by")
+        }
+
+        # Keep already-resolved leave actions visible even after a transfer
+        # changes the task assignee.
+        task_by_id = {task.id: task for task in current_project_tasks}
+        for action in existing_actions.values():
+            if action.is_resolved and action.task_id not in task_by_id:
+                task_by_id[action.task_id] = action.task
+
+        tasks = sorted(
+            task_by_id.values(),
+            key=lambda task: task.due_date,
+        )
 
         results = []
-
         for task in tasks:
+            existing_action = existing_actions.get(task.id)
+
+            # A resolved transferred task no longer belongs to the employee's
+            # active schedule; preserve its resolution instead of recreating it.
+            if (
+                existing_action
+                and existing_action.is_resolved
+                and task.assigned_to_id != leave_request.user_id
+            ):
+                results.append({
+                    "leave_task_action_id": existing_action.id,
+                    "task_id": task.id,
+                    "title": task.title,
+                    "status": task.status,
+                    "due_date": task.due_date,
+                    "expected_duration": task.expected_duration,
+                    "actual_duration": task.actual_duration,
+                    "remaining_duration": get_task_remaining_duration(task),
+                    "available_duration": None,
+                    "available_hours": None,
+                    "deficit_hours": 0,
+                    "impact": existing_action.impact,
+                    "requires_action": existing_action.requires_action,
+                    "is_resolved": True,
+                    "action": existing_action.action,
+                    "allowed_actions": [],
+                    "requires_manager_decision": False,
+                    "manager_decision": None,
+                    "review_report_id": None,
+                    "message": "This leave task action has already been resolved.",
+                })
+                continue
+
             analysis = LeaveRequestService.analyze_task_for_leave(
                 task=task,
                 leave_request=leave_request,
+                schedule=leave_schedule,
+                baseline_schedule=baseline_schedule,
             )
 
-            leave_action, created = (
-                LeaveTaskAction.objects.update_or_create(
-                    request=leave_request,
-                    task=task,
-                    defaults={
-                        "impact": analysis["impact"],
-                        "requires_action": analysis[
-                            "requires_action"
-                        ],
-                    },
-                )
+            leave_action, created = LeaveTaskAction.objects.get_or_create(
+                request=leave_request,
+                task=task,
+                defaults={
+                    "impact": analysis["impact"],
+                    "requires_action": analysis["requires_action"],
+                },
             )
 
-            if analysis["requires_action"]:
-                if created or leave_action.action == "NO_ACTION":
+            leave_action.impact = analysis["impact"]
+            leave_action.requires_action = analysis["requires_action"]
+
+            if created:
+                if analysis["requires_action"]:
                     leave_action.action = None
                     leave_action.is_resolved = False
                     leave_action.resolved_by = None
                     leave_action.resolved_at = None
-                    leave_action.new_assignee = None
-                    leave_action.new_due_date = None
+                else:
+                    leave_action.action = "NO_ACTION"
+                    leave_action.is_resolved = True
+                    leave_action.resolved_by = manager_user
+                    leave_action.resolved_at = timezone.now()
+
+            elif leave_action.is_resolved:
+                # Preserve the manager's selected action and its data. Re-running
+                # analysis must not erase a transfer or extended due date.
+                pass
+
+            elif analysis["requires_action"]:
+                if leave_action.action == "NO_ACTION":
+                    leave_action.action = None
+                leave_action.is_resolved = False
+                leave_action.resolved_by = None
+                leave_action.resolved_at = None
+                leave_action.new_assignee = None
+                leave_action.new_due_date = None
 
             else:
                 leave_action.action = "NO_ACTION"
@@ -126,19 +219,7 @@ class LeaveRequestService:
                 leave_action.new_assignee = None
                 leave_action.new_due_date = None
 
-            leave_action.save(
-                update_fields=[
-                    "action",
-                    "impact",
-                    "requires_action",
-                    "is_resolved",
-                    "resolved_by",
-                    "resolved_at",
-                    "new_assignee",
-                    "new_due_date",
-                    "updated_at",
-                ]
-            )
+            leave_action.save()
 
             results.append({
                 "leave_task_action_id": leave_action.id,
@@ -148,52 +229,81 @@ class LeaveRequestService:
                 "due_date": task.due_date,
                 "expected_duration": task.expected_duration,
                 "actual_duration": task.actual_duration,
-                "remaining_duration": analysis[
-                    "remaining_duration"
-                ],
-                "available_duration": analysis[
-                    "available_duration"
-                ],
+                "remaining_duration": analysis["remaining_duration"],
+                "available_duration": analysis["available_duration"],
+                "available_hours": analysis["available_hours"],
+                "deficit_hours": analysis["deficit_hours"],
                 "impact": analysis["impact"],
-                "requires_action": analysis[
-                    "requires_action"
-                ],
+                "requires_action": analysis["requires_action"],
                 "is_resolved": leave_action.is_resolved,
                 "action": leave_action.action,
+                "allowed_actions": analysis["allowed_actions"],
+                "requires_manager_decision": analysis.get(
+                    "requires_manager_decision",
+                    False,
+                ),
+                "manager_decision": analysis.get("manager_decision"),
+                "review_report_id": analysis.get("review_report_id"),
                 "message": analysis["message"],
+                "baseline_valid": analysis["baseline_valid"],
+                "valid_with_leave": analysis["valid_with_leave"],
             })
 
-        unresolved_actions_count = (
-            LeaveTaskAction.objects.filter(
-                request=leave_request,
-                requires_action=True,
-                is_resolved=False,
-            ).count()
-        )
+        unresolved_actions_count = LeaveTaskAction.objects.filter(
+            request=leave_request,
+            requires_action=True,
+            is_resolved=False,
+        ).count()
 
-        if unresolved_actions_count > 0:
-            leave_request.status = "ACTION_REQUIRED"
-        else:
-            leave_request.status = "PENDING"
-
-        leave_request.save(
-            update_fields=[
-                "status",
-                "updated_at",
-            ]
+        leave_request.status = (
+            "ACTION_REQUIRED"
+            if unresolved_actions_count > 0
+            else "PENDING"
         )
+        leave_request.save(update_fields=["status", "updated_at"])
 
         completed_tasks = sum(
-            1
-            for item in results
-            if item["impact"] == "COMPLETED"
+            1 for item in results if item["impact"] == "COMPLETED"
         )
-
         safe_tasks = sum(
             1
             for item in results
             if not item["requires_action"]
             and item["impact"] != "COMPLETED"
+        )
+        tasks_awaiting_manager_review = sum(
+            1
+            for item in results
+            if item.get("requires_manager_decision")
+        )
+
+        project_remaining_workload = sum(
+            item["remaining_hours"]
+            for item in leave_schedule["tasks"]
+            if item["project_id"] == leave_request.project_id
+            and item["status"] not in {"DONE", "REVIEW"}
+        )
+
+        working_capacity_before_leave = (
+            WorkingTimeService.get_working_hours_between(
+                workspace=workspace,
+                start_datetime=now,
+                end_datetime=leave_request.leave_start,
+            )
+            if leave_request.leave_start > now
+            else 0
+        )
+
+        safe_assignable_before_leave = (
+            calculate_safe_assignable_hours(
+                employee=leave_request.user,
+                project=leave_request.project,
+                due_date=leave_request.leave_start,
+                start_datetime=now,
+                extra_leaves=[leave_request],
+            )
+            if leave_request.leave_start > now
+            else 0
         )
 
         return {
@@ -205,40 +315,37 @@ class LeaveRequestService:
                     or leave_request.user.username
                 ),
             },
+            "workspace_id": workspace.id,
+            "project_id": leave_request.project_id,
             "leave_start": leave_request.leave_start,
             "leave_end": leave_request.leave_end,
             "status": leave_request.status,
+            "capacity": {
+                "workspace_remaining_workload_hours": baseline_schedule[
+                    "total_remaining_workload_hours"
+                ],
+                "leave_project_remaining_workload_hours": round(
+                    project_remaining_workload,
+                    2,
+                ),
+                "working_capacity_before_leave_hours": round(
+                    working_capacity_before_leave,
+                    2,
+                ),
+                "safe_assignable_before_leave_hours": round(
+                    max(safe_assignable_before_leave, 0),
+                    2,
+                ),
+            },
             "summary": {
                 "total_tasks": len(results),
                 "completed_tasks": completed_tasks,
                 "safe_tasks": safe_tasks,
-                "tasks_requiring_action": (
-                    unresolved_actions_count
-                ),
+                "tasks_requiring_action": unresolved_actions_count,
+                "tasks_awaiting_manager_review": tasks_awaiting_manager_review,
             },
             "tasks": results,
         }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
     @staticmethod
@@ -246,195 +353,157 @@ class LeaveRequestService:
         *,
         task,
         leave_request,
+        schedule=None,
+        baseline_schedule=None,
     ):
         now = timezone.now()
-
-        expected = (
-            task.expected_duration
-            or timedelta(0)
-        )
-
-        actual = (
-            task.actual_duration
-            or timedelta(0)
-        )
-
-        if (
-            task.status == "INPROGRESS"
-            and task.start_time
-        ):
-            current_session = (
-                now - task.start_time
-            )
-
-            actual += current_session
-
-        remaining = (
-            expected - actual
-        )
-
-        if remaining < timedelta(0):
-            remaining = timedelta(0)
-
-        result = {
-            "impact": None,
-            "requires_action": False,
-            "remaining_duration": remaining,
-            "available_duration": None,
-            "message": "",
-        }
-
+        remaining = get_task_remaining_duration(task, now=now)
+        remaining_hours = remaining.total_seconds() / 3600
 
         if task.status == "DONE":
-            result.update({
+            return {
                 "impact": "COMPLETED",
                 "requires_action": False,
-                "message": (
-                    "Task is already completed."
-                ),
-            })
-
-            return result
+                "remaining_duration": remaining,
+                "available_duration": 0,
+                "available_hours": 0,
+                "deficit_hours": 0,
+                "allowed_actions": [],
+                "requires_manager_decision": False,
+                "manager_decision": None,
+                "review_report_id": None,
+                "baseline_valid": True,
+                "valid_with_leave": True,
+                "message": "Task is already completed.",
+            }
 
         if task.status == "REVIEW":
-            result.update({
-                "impact": (
-                    "AWAITING_MANAGER_REVIEW"
-                ),
-                "requires_action": True,
-                "message": (
-                    "The task report must be reviewed "
-                    "before the leave request can "
-                    "be approved."
-                ),
-            })
-
-            return result
-
-
-        if (
-            task.due_date
-            < leave_request.leave_start
-        ):
-            available_before_leave_hours = (
-    WorkingTimeService.get_working_hours_between(
-        workspace=task.project.workspace,
-        start_datetime=now,
-        end_datetime=leave_request.leave_start,
-    )
-)
-
-            remaining_hours = (
-                remaining.total_seconds() / 3600
+            report = (
+                task.technical_reports
+                .filter(status="SUBMITTED")
+                .order_by("-created_at")
+                .first()
             )
-
-            can_finish = (
-                remaining_hours <= available_before_leave_hours
-            )
-
-            result.update({
-                "impact": (
-                    "CAN_FINISH_BEFORE_LEAVE"
-                    if can_finish
-                    else (
-                        "NOT_ENOUGH_TIME_BEFORE_LEAVE"
-                    )
-                ),
-                "requires_action": (
-                    not can_finish
-                ),
-                "available_duration": (
-                available_before_leave_hours                ),
-                "message": (
-                    "Task can be completed before leave."
-                    if can_finish
-                    else (
-                        "There is not enough time "
-                        "before leave."
-                    )
-                ),
-            })
-
-            return result
-
-        if (
-            leave_request.leave_start
-            <= task.due_date
-            <= leave_request.leave_end
-        ):
-            result.update({
-                "impact": "DUE_DURING_LEAVE",
+            return {
+                "impact": "AWAITING_MANAGER_REVIEW",
                 "requires_action": True,
+                "remaining_duration": timedelta(0),
+                "available_duration": 0,
+                "available_hours": 0,
+                "deficit_hours": 0,
+                "allowed_actions": [],
+                "requires_manager_decision": True,
+                "manager_decision": "REVIEW_TECHNICAL_REPORT",
+                "review_report_id": report.id if report else None,
+                "baseline_valid": True,
+                "valid_with_leave": True,
                 "message": (
-                    "Task is due during the "
-                    "leave period."
+                    "This task is awaiting technical report review. "
+                    "The manager must approve or reject the report before "
+                    "the leave request can be approved."
                 ),
-            })
+            }
 
-            return result
-
-
-        available_after_leave_hours = (
-            WorkingTimeService.get_working_hours_between(
+        if schedule is None:
+            schedule = calculate_employee_schedule(
+                employee=leave_request.user,
                 workspace=task.project.workspace,
-                start_datetime=leave_request.leave_end,
-                end_datetime=task.due_date,
+                start_datetime=now,
+                extra_leaves=[leave_request],
             )
+
+        if baseline_schedule is None:
+            baseline_schedule = calculate_employee_schedule(
+                employee=leave_request.user,
+                workspace=task.project.workspace,
+                start_datetime=now,
+            )
+
+        result = schedule["task_results"].get(task.id)
+        baseline_result = baseline_schedule["task_results"].get(task.id)
+
+        if result is None:
+            return {
+                "impact": "COMPLETED",
+                "requires_action": False,
+                "remaining_duration": remaining,
+                "available_duration": 0,
+                "available_hours": 0,
+                "deficit_hours": 0,
+                "allowed_actions": [],
+                "requires_manager_decision": False,
+                "manager_decision": None,
+                "review_report_id": None,
+                "baseline_valid": True,
+                "valid_with_leave": True,
+                "message": "Task is no longer part of the employee's active workload.",
+            }
+
+        valid_with_leave = result["valid"]
+        baseline_valid = (
+            baseline_result["valid"]
+            if baseline_result is not None
+            else True
         )
+        available_hours = result["available_hours_before_allocation"]
+        deficit_hours = result["deficit_hours"]
 
-        remaining_hours = (
-            remaining.total_seconds()
-            / 3600
-        )
-
-        can_finish_after_return = (
-            remaining_hours
-            <= available_after_leave_hours
-)
-
-        result.update({
-            "impact": (
+        if task.due_date < leave_request.leave_start:
+            impact = (
+                "CAN_FINISH_BEFORE_LEAVE"
+                if valid_with_leave
+                else "NOT_ENOUGH_TIME_BEFORE_LEAVE"
+            )
+        elif leave_request.leave_start <= task.due_date <= leave_request.leave_end:
+            impact = (
+                "CAN_FINISH_BEFORE_LEAVE"
+                if valid_with_leave
+                else "DUE_DURING_LEAVE"
+            )
+        else:
+            impact = (
                 "CAN_FINISH_AFTER_RETURN"
-                if can_finish_after_return
-                else (
-                    "NOT_ENOUGH_TIME_AFTER_RETURN"
-                )
+                if valid_with_leave
+                else "NOT_ENOUGH_TIME_AFTER_RETURN"
+            )
+
+        requires_action = not valid_with_leave
+
+        if valid_with_leave:
+            message = (
+                "The task remains schedulable before its deadline after "
+                "considering all workspace tasks and project leave periods."
+            )
+        elif not baseline_valid:
+            message = (
+                "The task is already over the employee's available workspace "
+                "capacity, even before applying this leave request."
+            )
+        else:
+            message = (
+                "The leave request makes the employee's schedule infeasible "
+                "for this task before its deadline."
+            )
+
+        return {
+            "impact": impact,
+            "requires_action": requires_action,
+            "remaining_duration": remaining,
+            "available_duration": round(available_hours, 2),
+            "available_hours": round(available_hours, 2),
+            "deficit_hours": round(deficit_hours, 2),
+            "allowed_actions": (
+                ["TRANSFER_TASK", "EXTEND_DUE_DATE"]
+                if requires_action
+                else []
             ),
-            "requires_action": (
-                not can_finish_after_return
-            ),
-            "available_duration": (
-                available_after_leave_hours
-            ),
-            "message": (
-                "Task can be completed after "
-                "returning from leave."
-                if can_finish_after_return
-                else (
-                    "There is not enough time "
-                    "after returning from leave."
-                )
-            ),
-        })
-
-        return result
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+            "requires_manager_decision": False,
+            "manager_decision": None,
+            "review_report_id": None,
+            "baseline_valid": baseline_valid,
+            "valid_with_leave": valid_with_leave,
+            "message": message,
+        }
 
 
     @staticmethod
@@ -486,9 +555,27 @@ class LeaveRequestService:
                         "action": "This leave task action is already resolved."
                     })
         valid_actions = {
-            choice[0]
-            for choice in LeaveTaskAction.ACTION_CHOICES
+            "NO_ACTION",
+            "TRANSFER_TASK",
+            "EXTEND_DUE_DATE",
         }
+
+        if action == "REVIEW_REPORT":
+            raise ValidationError({
+                "action": (
+                    "Technical reports must be approved or rejected through "
+                    "the technical report review endpoint. Re-run leave "
+                    "analysis after the report decision."
+                )
+            })
+
+        if action == "PAUSE_TASK":
+            raise ValidationError({
+                "action": (
+                    "PAUSE_TASK is not used to resolve leave capacity "
+                    "conflicts. Transfer the task or extend its due date."
+                )
+            })
 
         if action not in valid_actions:
             raise ValidationError({
@@ -520,15 +607,6 @@ class LeaveRequestService:
                 task=task,
                 new_due_date=validated_data.get("new_due_date"),
             )
-
-        elif action == "PAUSE_TASK":
-            LeaveRequestService._pause_task(
-            leave_action=leave_action,
-            task=task,
-            new_due_date=validated_data.get(
-                "new_due_date"
-            ),
-        )
 
         elif action == "NO_ACTION":
             LeaveRequestService._take_no_action(
@@ -970,69 +1048,16 @@ class LeaveRequestService:
                 )
             })
 
-        if task.due_date and new_due_date <= task.due_date:
-            raise ValidationError({
-                "new_due_date": (
-                    "The new due date must be later "
-                    "than the current due date."
-                )
-            })
-
-        available_hours = (
-            WorkingTimeService.get_working_hours_between(
-                workspace=task.project.workspace,
-                start_datetime=leave_action.request.leave_end,
-                end_datetime=new_due_date,
-            )
+        validate_employee_task_availability(
+            employee=task.assigned_to,
+            project=task.project,
+            due_date=new_due_date,
+            expected_duration=(task.expected_duration or timedelta(0)),
+            actual_duration=(task.actual_duration or timedelta(0)),
+            start_datetime=timezone.now(),
+            task_id=task.id,
+            extra_leaves=[leave_action.request],
         )
-
-        if available_hours <= 0:
-            raise ValidationError({
-                "new_due_date": (
-                    "The selected date has no available "
-                    "working hours after the leave."
-                ),
-                "code": "NO_WORKING_TIME_AFTER_LEAVE",
-                "available_hours": available_hours,
-            })
-
-
-        expected_duration = (
-            task.expected_duration
-            or timedelta(0)
-        )
-
-        actual_duration = (
-            task.actual_duration
-            or timedelta(0)
-        )
-
-        remaining_duration = max(
-            expected_duration - actual_duration,
-            timedelta(0),
-        )
-
-        remaining_hours = (
-            remaining_duration.total_seconds()
-            / 3600
-        )
-
-        if remaining_hours > available_hours:
-            raise ValidationError({
-                "new_due_date": (
-                    "The selected date does not provide "
-                    "enough working hours after the leave."
-                ),
-                "code": "INSUFFICIENT_WORKING_TIME_AFTER_LEAVE",
-                "required_hours": round(
-                    remaining_hours,
-                    2,
-                ),
-                "available_hours": round(
-                    available_hours,
-                    2,
-                ),
-            })
         leave_action.previous_due_date = task.due_date
         TaskService.validate_dependency_due_date(
             task=task,
@@ -1116,66 +1141,16 @@ class LeaveRequestService:
                 )
             })
 
-        expected_duration = (
-            task.expected_duration
-            or timedelta(0)
+        validate_employee_task_availability(
+            employee=task.assigned_to,
+            project=task.project,
+            due_date=new_due_date,
+            expected_duration=(task.expected_duration or timedelta(0)),
+            actual_duration=(task.actual_duration or timedelta(0)),
+            start_datetime=timezone.now(),
+            task_id=task.id,
+            extra_leaves=[leave_request],
         )
-
-        actual_duration = (
-            task.actual_duration
-            or timedelta(0)
-        )
-
-        current_session = timedelta(0)
-
-        if (
-            task.status == "INPROGRESS"
-            and task.start_time
-        ):
-            current_session = (
-                now - task.start_time
-            )
-
-        worked_duration = (
-            actual_duration
-            + current_session
-        )
-
-        remaining_duration = max(
-            expected_duration
-            - worked_duration,
-            timedelta(0),
-        )
-
-        available_after_leave_hours = (
-            WorkingTimeService.get_working_hours_between(
-                workspace=task.project.workspace,
-                start_datetime=leave_request.leave_end,
-                end_datetime=new_due_date,
-            )
-        )
-
-        remaining_hours = (
-            remaining_duration.total_seconds()
-            / 3600
-        )
-
-        if remaining_hours > available_after_leave_hours:
-            raise ValidationError({
-                "new_due_date": (
-                    "The selected date does not provide "
-                    "enough working hours after the leave."
-                ),
-                "code": "INSUFFICIENT_WORKING_TIME_AFTER_LEAVE",
-                "required_hours": round(
-                    remaining_hours,
-                    2,
-                ),
-                "available_hours": round(
-                    available_after_leave_hours,
-                    2,
-                ),
-            })
 
         leave_action.previous_assignee = (
             task.assigned_to

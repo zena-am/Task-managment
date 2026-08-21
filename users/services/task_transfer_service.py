@@ -204,13 +204,19 @@ class TaskTransferService:
             })
         assignment_time = timezone.now()
 
+        worked_duration = task.actual_duration or timedelta(0)
+        if task.status == "INPROGRESS" and task.start_time:
+            worked_duration += max(
+                assignment_time - task.start_time,
+                timedelta(0),
+            )
 
         validate_employee_task_availability(
             employee=new_assignee,
             project=project,
             due_date=task.due_date,
             expected_duration=task.expected_duration,
-            actual_duration=timedelta(0),
+            actual_duration=worked_duration,
             start_datetime=assignment_time,
         )
 
@@ -245,7 +251,7 @@ class TaskTransferService:
         task.start_time = None
         task.end_time = None
 
-        task.actual_duration = timedelta(0)
+        task.actual_duration = worked_duration
 
         task.save(
             update_fields=[

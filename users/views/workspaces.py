@@ -15,6 +15,7 @@ from rest_framework import serializers
 from django.utils.dateparse import parse_datetime
 from users.models import Project
 from users.services.working_time_service import WorkingTimeService
+from users.services.task_service import calculate_employee_task_availability
 from users.errors.exceptions import BaseAppException, PermissionDeniedError
 from users.errors.messages.success import success_response
 from users.services.WorkspaceService import WorkspaceServices
@@ -269,22 +270,40 @@ class TaskWorkingTimeCheckAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-
         project_id = request.data.get("project")
-        expected_hours = request.data.get("expected_hours")
-        due_date = request.data.get("due_date")
-        due_date = parse_datetime(due_date)
-        task_id = request.data.get("task_id")
         employee_id = request.data.get("employee")
+        expected_hours = request.data.get("expected_hours")
+        due_date_value = request.data.get("due_date")
+        task_id = request.data.get("task_id")
 
-
+        if not project_id:
+            raise serializers.ValidationError({
+                "project": "Project is required."
+            })
 
         if not employee_id:
             raise serializers.ValidationError({
                 "employee": "Employee is required."
             })
 
-        employee = User.objects.get(id=employee_id)
+        if expected_hours in [None, ""]:
+            raise serializers.ValidationError({
+                "expected_hours": "Expected hours are required."
+            })
+
+        try:
+            expected_hours = float(expected_hours)
+        except (TypeError, ValueError):
+            raise serializers.ValidationError({
+                "expected_hours": "Expected hours must be a number."
+            })
+
+        if expected_hours <= 0:
+            raise serializers.ValidationError({
+                "expected_hours": "Expected hours must be greater than zero."
+            })
+
+        due_date = parse_datetime(due_date_value or "")
         if not due_date:
             raise serializers.ValidationError({
                 "due_date": "Invalid datetime format."
@@ -295,164 +314,68 @@ class TaskWorkingTimeCheckAPIView(APIView):
                 due_date,
                 timezone.get_current_timezone(),
             )
+
+        project = get_object_or_404(Project, id=project_id)
+        employee = get_object_or_404(User, id=employee_id)
+
+        actual_duration = timedelta(0)
         if task_id:
-            task = Task.objects.get(id=task_id)
+            task = get_object_or_404(Task, id=task_id)
+            actual_duration = task.actual_duration or timedelta(0)
 
-            start_datetime = (
-                task.assigned_at
-                or task.created_at
-            )
-        else:
-            start_datetime = timezone.now()
-
-        if not due_date:
-            raise serializers.ValidationError({
-                "due_date": "Invalid datetime format."
-            })
-        if not project_id or not expected_hours or not due_date:
-            raise serializers.ValidationError({
-                "detail": "project, expected_hours and due_date are required."
-            })
-
-
-        project = Project.objects.get(
-            id=project_id
-        )
-
-
-        workspace_hours = (
-            WorkingTimeService.get_working_hours_between(
-                workspace=project.workspace,
-                start_datetime=start_datetime,
-                end_datetime=due_date,
-            )
-        )
-        busy_hours = 0
-        existing_tasks = Task.objects.filter(
-            assigned_to=employee,
+        result = calculate_employee_task_availability(
+            employee=employee,
             project=project,
-            is_deleted=False,
-            is_archived=False,
-            due_date__lte=due_date,
-        ).exclude(
-            status="DONE"
+            due_date=due_date,
+            expected_duration=timedelta(hours=expected_hours),
+            actual_duration=actual_duration,
+            start_datetime=timezone.now(),
+            task_id=task_id,
+            include_suggestion=True,
         )
-        if task_id:
-            existing_tasks = existing_tasks.exclude(
-                id=task_id
+
+        message = "The selected due date is feasible."
+        if not result["valid"]:
+            message = (
+                "The selected due date is not feasible for this employee "
+                "after considering workspace workload and project leave periods."
             )
-
-
-        for task in existing_tasks:
-            remaining = max(
-                (
-                    task.expected_duration or timedelta(0)
-                )
-                -
-                (
-                    task.actual_duration or timedelta(0)
-                ),
-                timedelta(0),
+        elif result.get("deadline_during_leave"):
+            message = (
+                "The deadline falls during approved project leave, but the task "
+                "can still be completed within the available working time."
             )
-
-            busy_hours += (
-                remaining.total_seconds() / 3600
-    )
-
-
-        leave_hours = 0
-
-
-
-        approved_leaves = RequestForm.objects.filter(
-            user=employee,
-            request_type="LEAVE",
-            status="APPROVED",
-            leave_end__gte=start_datetime,
-            leave_start__lte=due_date,
-        )
-        import logging
-
-
-
-        for leave in approved_leaves:
-            leave_start = max(
-                start_datetime,
-                leave.leave_start,
-            )
-
-            leave_end = min(
-                due_date,
-                leave.leave_end,
-            )
-
-            if leave_end > leave_start:
-                leave_hours += WorkingTimeService.get_working_hours_between(
-                    workspace=project.workspace,
-                    start_datetime=leave_start,
-                    end_datetime=leave_end,
-                )
-        logger = logging.getLogger(__name__)
-
-        logger.warning(
-            "workspace=%s busy=%s leave=%s",
-            workspace_hours,
-            busy_hours,
-            leave_hours
-        )
-        raw_available_hours = (
-            workspace_hours
-            - busy_hours
-            - leave_hours
-        )
-
-        available_hours = max(
-            raw_available_hours,
-            0,
-        )
-
-        overbooked_hours = max(
-            -raw_available_hours,
-            0,
-        )
-
-
-
-
-        valid = (
-            float(expected_hours)
-            <= available_hours
-        )
-        suggested_due_date = None
-
-        if not valid:
-            suggested_due_date = WorkingTimeService.add_working_hours(
-                workspace=project.workspace,
-                start_datetime=timezone.now(),
-                hours=float(expected_hours),
-            )
-
-
 
         return Response({
-                "valid": float(expected_hours) <= raw_available_hours,
-
-                "required_hours": float(expected_hours),
-
-                "available_hours": round(
-                    available_hours,
-                    2,
-                ),
-
-                "overbooked_hours": round(
-                    overbooked_hours,
-                    2,
-                ),
-                "message": (
-                "The due date is enough."
-                if valid
-                else
-                "The selected due date is not enough."
+            "valid": result["valid"],
+            "reason": result.get("reason"),
+            "required_hours": result.get("required_hours", 0),
+            "remaining_required_hours": result.get(
+                "remaining_required_hours",
+                result.get("required_hours", 0),
             ),
-            "suggested_due_date": suggested_due_date,
-            })
+            "available_hours": result.get("available_hours", 0),
+            "deficit_hours": result.get("deficit_hours", 0),
+            "overbooked_hours": result.get("deficit_hours", 0),
+            "workspace_remaining_workload_hours": result.get(
+                "workspace_remaining_workload_hours",
+                0,
+            ),
+            "deadline_during_leave": result.get(
+                "deadline_during_leave",
+                False,
+            ),
+            "approved_leave_intervals": result.get(
+                "approved_leave_intervals",
+                [],
+            ),
+            "pending_leave_warnings": result.get(
+                "pending_leave_warnings",
+                [],
+            ),
+            "affected_tasks": result.get("affected_tasks", []),
+            "existing_conflicts": result.get("existing_conflicts", []),
+            "candidate_valid": result.get("candidate_valid", result["valid"]),
+            "message": message,
+            "suggested_due_date": result.get("suggested_due_date"),
+        })

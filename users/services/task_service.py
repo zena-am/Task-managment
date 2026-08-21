@@ -55,6 +55,678 @@ def handle_side_effects(task, user, new_status):
 
 
 
+def _duration_hours(value):
+    if not value:
+        return 0.0
+    return max(value.total_seconds() / 3600, 0.0)
+
+
+def get_task_remaining_duration(task, *, now=None):
+    """Return only the work that is still required for a task."""
+    now = now or timezone.now()
+    expected = task.expected_duration or timedelta(0)
+    actual = task.actual_duration or timedelta(0)
+
+    if task.status == "INPROGRESS" and task.start_time:
+        current_session = max(
+            now - task.start_time,
+            timedelta(0),
+        )
+        actual += current_session
+
+    return max(expected - actual, timedelta(0))
+
+
+def _normalise_leave_intervals(
+    *,
+    employee,
+    workspace,
+    start_datetime,
+    end_datetime,
+    extra_leaves=None,
+):
+    """Collect project-scoped leave intervals that affect this workspace.
+
+    Approved leaves are enforced. extra_leaves is used by leave analysis to
+    temporarily treat the leave currently being analysed as approved.
+    """
+    leaves = list(
+        RequestForm.objects.filter(
+            user=employee,
+            project__workspace=workspace,
+            request_type="LEAVE",
+            status="APPROVED",
+            leave_start__lt=end_datetime,
+            leave_end__gt=start_datetime,
+        ).select_related("project")
+    )
+
+    seen_ids = {leave.id for leave in leaves if leave.id is not None}
+
+    for leave in extra_leaves or []:
+        if not leave or not leave.leave_start or not leave.leave_end:
+            continue
+        if leave.project.workspace_id != workspace.id:
+            continue
+        if leave.leave_start >= end_datetime or leave.leave_end <= start_datetime:
+            continue
+        if leave.id is not None and leave.id in seen_ids:
+            continue
+        leaves.append(leave)
+        if leave.id is not None:
+            seen_ids.add(leave.id)
+
+    result = []
+    for leave in leaves:
+        result.append({
+            "request_id": leave.id,
+            "project_id": leave.project_id,
+            "start": max(start_datetime, leave.leave_start),
+            "end": min(end_datetime, leave.leave_end),
+            "status": leave.status,
+        })
+
+    return result
+
+
+def _build_capacity_segments(
+    *,
+    workspace,
+    start_datetime,
+    end_datetime,
+    leave_intervals,
+):
+    """Split workspace working time at leave boundaries.
+
+    Every segment is shared employee capacity. blocked_projects contains only
+    the projects whose tasks cannot use that segment because leave is
+    project-specific.
+    """
+    working_intervals = WorkingTimeService.get_working_intervals(
+        workspace=workspace,
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+    )
+
+    segments = []
+
+    for work_start, work_end in working_intervals:
+        boundaries = {work_start, work_end}
+
+        relevant_leaves = []
+        for leave in leave_intervals:
+            overlap_start = max(work_start, leave["start"])
+            overlap_end = min(work_end, leave["end"])
+            if overlap_end > overlap_start:
+                relevant_leaves.append(leave)
+                boundaries.add(overlap_start)
+                boundaries.add(overlap_end)
+
+        ordered = sorted(boundaries)
+        for index in range(len(ordered) - 1):
+            segment_start = ordered[index]
+            segment_end = ordered[index + 1]
+            if segment_end <= segment_start:
+                continue
+
+            blocked_projects = {
+                leave["project_id"]
+                for leave in relevant_leaves
+                if leave["start"] < segment_end
+                and leave["end"] > segment_start
+            }
+
+            segments.append({
+                "start": segment_start,
+                "end": segment_end,
+                "cursor": segment_start,
+                "blocked_projects": blocked_projects,
+            })
+
+    return segments
+
+
+def _available_segment_hours(
+    *,
+    segments,
+    project_id,
+    deadline,
+):
+    total = 0.0
+    for segment in segments:
+        if project_id in segment["blocked_projects"]:
+            continue
+
+        start = segment["cursor"]
+        end = min(segment["end"], deadline)
+        if end > start:
+            total += (end - start).total_seconds() / 3600
+
+    return total
+
+
+def _schedule_task_items(*, task_items, segments):
+    """Schedule tasks using earliest-deadline-first over shared capacity."""
+    ordered_items = sorted(
+        task_items,
+        key=lambda item: (
+            item["due_date"],
+            1 if item.get("is_hypothetical") else 0,
+            str(item["id"]),
+        ),
+    )
+
+    results = {}
+
+    for item in ordered_items:
+        task_id = item["id"]
+        remaining_hours = max(float(item["remaining_hours"]), 0.0)
+
+        if item["status"] in {"DONE", "REVIEW"} or remaining_hours <= 0:
+            results[task_id] = {
+                "valid": True,
+                "remaining_hours": remaining_hours,
+                "available_hours_before_allocation": 0.0,
+                "allocated_hours": 0.0,
+                "deficit_hours": 0.0,
+                "completion_time": None,
+            }
+            continue
+
+        deadline = item["due_date"]
+        available_before = _available_segment_hours(
+            segments=segments,
+            project_id=item["project_id"],
+            deadline=deadline,
+        )
+
+        needed = remaining_hours
+        allocated = 0.0
+        completion_time = None
+
+        for segment in segments:
+            if needed <= 1e-9:
+                break
+            if item["project_id"] in segment["blocked_projects"]:
+                continue
+
+            start = segment["cursor"]
+            end = min(segment["end"], deadline)
+            if end <= start:
+                continue
+
+            available = (end - start).total_seconds() / 3600
+            take = min(needed, available)
+
+            segment["cursor"] = start + timedelta(hours=take)
+            allocated += take
+            needed -= take
+
+            if needed <= 1e-9:
+                completion_time = segment["cursor"]
+
+        deficit = max(needed, 0.0)
+        results[task_id] = {
+            "valid": deficit <= 1e-6,
+            "remaining_hours": round(remaining_hours, 4),
+            "available_hours_before_allocation": round(available_before, 4),
+            "allocated_hours": round(allocated, 4),
+            "deficit_hours": round(deficit, 4),
+            "completion_time": completion_time,
+        }
+
+    return results
+
+
+def calculate_employee_schedule(
+    *,
+    employee,
+    workspace,
+    start_datetime=None,
+    end_datetime=None,
+    extra_leaves=None,
+    exclude_task_id=None,
+    hypothetical_task=None,
+):
+    """Build one shared workspace workload timeline for an employee.
+
+    Workload comes from all projects in the workspace. Leave remains scoped to
+    its own project, so tasks from other projects can still use those hours.
+    """
+    start_datetime = start_datetime or timezone.now()
+
+    queryset = Task.objects.filter(
+        assigned_to=employee,
+        project__workspace=workspace,
+        is_deleted=False,
+        is_archived=False,
+    ).select_related("project")
+
+    if exclude_task_id:
+        queryset = queryset.exclude(id=exclude_task_id)
+
+    task_objects = list(queryset)
+    task_items = []
+    now = start_datetime
+
+    for task in task_objects:
+        remaining = get_task_remaining_duration(task, now=now)
+        task_items.append({
+            "id": task.id,
+            "task": task,
+            "project_id": task.project_id,
+            "due_date": task.due_date,
+            "remaining_hours": _duration_hours(remaining),
+            "status": task.status,
+            "title": task.title,
+            "is_hypothetical": False,
+        })
+
+    if hypothetical_task:
+        task_items.append(hypothetical_task)
+
+    due_dates = [
+        item["due_date"]
+        for item in task_items
+        if item.get("due_date") is not None
+    ]
+
+    horizon_candidates = list(due_dates)
+    if end_datetime is not None:
+        horizon_candidates.append(end_datetime)
+
+    horizon = max(horizon_candidates, default=start_datetime)
+    if horizon <= start_datetime:
+        horizon = start_datetime + timedelta(seconds=1)
+
+    leave_intervals = _normalise_leave_intervals(
+        employee=employee,
+        workspace=workspace,
+        start_datetime=start_datetime,
+        end_datetime=horizon,
+        extra_leaves=extra_leaves,
+    )
+
+    segments = _build_capacity_segments(
+        workspace=workspace,
+        start_datetime=start_datetime,
+        end_datetime=horizon,
+        leave_intervals=leave_intervals,
+    )
+
+    results = _schedule_task_items(
+        task_items=task_items,
+        segments=segments,
+    )
+
+    active_results = [
+        results[item["id"]]
+        for item in task_items
+        if item["status"] not in {"DONE", "REVIEW"}
+        and item["remaining_hours"] > 0
+    ]
+
+    total_remaining = sum(
+        item["remaining_hours"]
+        for item in task_items
+        if item["status"] not in {"DONE", "REVIEW"}
+    )
+
+    return {
+        "start_datetime": start_datetime,
+        "horizon": horizon,
+        "tasks": task_items,
+        "task_results": results,
+        "leave_intervals": leave_intervals,
+        "segments": segments,
+        "all_schedulable": all(
+            result["valid"]
+            for result in active_results
+        ),
+        "total_remaining_workload_hours": round(total_remaining, 2),
+    }
+
+
+def _pending_leave_warnings(
+    *,
+    employee,
+    project,
+    start_datetime,
+    due_date,
+):
+    pending = RequestForm.objects.filter(
+        user=employee,
+        project=project,
+        request_type="LEAVE",
+        status__in=["PENDING", "ACTION_REQUIRED", "ON_HOLD"],
+        leave_start__lt=due_date,
+        leave_end__gt=start_datetime,
+    ).order_by("leave_start")
+
+    return [
+        {
+            "request_id": leave.id,
+            "start": leave.leave_start,
+            "end": leave.leave_end,
+            "status": leave.status,
+        }
+        for leave in pending
+    ]
+
+
+def _calculate_task_availability_once(
+    *,
+    employee,
+    project,
+    due_date,
+    expected_duration,
+    actual_duration=None,
+    start_datetime=None,
+    task_id=None,
+    extra_leaves=None,
+):
+    start_datetime = start_datetime or timezone.now()
+    actual_duration = actual_duration or timedelta(0)
+
+    current_session = timedelta(0)
+    if task_id:
+        current_task = Task.objects.filter(id=task_id).first()
+        if (
+            current_task
+            and current_task.status == "INPROGRESS"
+            and current_task.start_time
+        ):
+            current_session = max(
+                start_datetime - current_task.start_time,
+                timedelta(0),
+            )
+
+    remaining_duration = max(
+        expected_duration - actual_duration - current_session,
+        timedelta(0),
+    )
+    required_hours = _duration_hours(remaining_duration)
+
+    baseline_schedule = calculate_employee_schedule(
+        employee=employee,
+        workspace=project.workspace,
+        start_datetime=start_datetime,
+        extra_leaves=extra_leaves,
+        exclude_task_id=task_id,
+    )
+
+    hypothetical = {
+        "id": "__candidate__",
+        "task": None,
+        "project_id": project.id,
+        "due_date": due_date,
+        "remaining_hours": required_hours,
+        "status": "TODO",
+        "title": "Candidate task",
+        "is_hypothetical": True,
+    }
+
+    schedule = calculate_employee_schedule(
+        employee=employee,
+        workspace=project.workspace,
+        start_datetime=start_datetime,
+        extra_leaves=extra_leaves,
+        exclude_task_id=task_id,
+        hypothetical_task=hypothetical,
+    )
+
+    candidate = schedule["task_results"]["__candidate__"]
+
+    baseline_conflicts = {}
+    for item in baseline_schedule["tasks"]:
+        if item["status"] in {"DONE", "REVIEW"}:
+            continue
+        result = baseline_schedule["task_results"][item["id"]]
+        if not result["valid"]:
+            baseline_conflicts[item["id"]] = {
+                "task_id": item["id"],
+                "title": item["title"],
+                "project_id": item["project_id"],
+                "due_date": item["due_date"],
+                "deficit_hours": round(result["deficit_hours"], 2),
+            }
+
+    candidate_conflicts = {}
+    for item in schedule["tasks"]:
+        if item.get("is_hypothetical") or item["status"] in {"DONE", "REVIEW"}:
+            continue
+        result = schedule["task_results"][item["id"]]
+        if not result["valid"]:
+            candidate_conflicts[item["id"]] = {
+                "task_id": item["id"],
+                "title": item["title"],
+                "project_id": item["project_id"],
+                "due_date": item["due_date"],
+                "deficit_hours": round(result["deficit_hours"], 2),
+            }
+
+    newly_affected_tasks = [
+        conflict
+        for task_key, conflict in candidate_conflicts.items()
+        if task_key not in baseline_conflicts
+    ]
+    existing_conflicts = list(baseline_conflicts.values())
+
+    same_project_leaves = [
+        leave
+        for leave in schedule["leave_intervals"]
+        if leave["project_id"] == project.id
+    ]
+
+    deadline_during_leave = any(
+        leave["start"] <= due_date <= leave["end"]
+        for leave in same_project_leaves
+    )
+
+    employee_already_overloaded = bool(existing_conflicts)
+    valid = (
+        candidate["valid"]
+        and not newly_affected_tasks
+        and not employee_already_overloaded
+    )
+
+    if valid:
+        reason = None
+    elif employee_already_overloaded:
+        reason = "EMPLOYEE_ALREADY_OVERLOADED"
+    elif newly_affected_tasks:
+        reason = "AFFECTS_EXISTING_TASKS"
+    elif same_project_leaves:
+        reason = "LEAVE_CAPACITY_CONFLICT"
+    else:
+        reason = "INSUFFICIENT_CAPACITY"
+
+    conflict_deficits = [
+        item["deficit_hours"]
+        for item in newly_affected_tasks + existing_conflicts
+    ]
+    deficit_hours = max(
+        [candidate["deficit_hours"]] + conflict_deficits,
+        default=0.0,
+    )
+
+    return {
+        "valid": valid,
+        "candidate_valid": candidate["valid"],
+        "reason": reason,
+        "required_hours": round(required_hours, 2),
+        "available_hours": round(
+            candidate["available_hours_before_allocation"],
+            2,
+        ),
+        "deficit_hours": round(deficit_hours, 2),
+        "remaining_required_hours": round(required_hours, 2),
+        "workspace_remaining_workload_hours": baseline_schedule[
+            "total_remaining_workload_hours"
+        ],
+        "deadline_during_leave": deadline_during_leave,
+        "affected_tasks": newly_affected_tasks,
+        "existing_conflicts": existing_conflicts,
+        "employee_already_overloaded": employee_already_overloaded,
+        "approved_leave_intervals": same_project_leaves,
+        "schedule": schedule,
+    }
+
+def calculate_employee_task_availability(
+    *,
+    employee,
+    project,
+    due_date,
+    expected_duration,
+    actual_duration=None,
+    start_datetime=None,
+    task_id=None,
+    extra_leaves=None,
+    include_suggestion=False,
+):
+    """Return availability details without raising a validation error."""
+    if due_date is None or expected_duration is None:
+        return {
+            "valid": True,
+            "reason": None,
+            "required_hours": 0.0,
+            "available_hours": 0.0,
+            "deficit_hours": 0.0,
+            "suggested_due_date": None,
+            "affected_tasks": [],
+            "pending_leave_warnings": [],
+        }
+
+    start_datetime = start_datetime or timezone.now()
+
+    if due_date <= start_datetime:
+        return {
+            "valid": False,
+            "reason": "DUE_DATE_NOT_IN_FUTURE",
+            "required_hours": round(_duration_hours(expected_duration), 2),
+            "available_hours": 0.0,
+            "deficit_hours": round(_duration_hours(expected_duration), 2),
+            "suggested_due_date": None,
+            "affected_tasks": [],
+            "pending_leave_warnings": [],
+            "deadline_during_leave": False,
+        }
+
+    result = _calculate_task_availability_once(
+        employee=employee,
+        project=project,
+        due_date=due_date,
+        expected_duration=expected_duration,
+        actual_duration=actual_duration,
+        start_datetime=start_datetime,
+        task_id=task_id,
+        extra_leaves=extra_leaves,
+    )
+
+    result["pending_leave_warnings"] = _pending_leave_warnings(
+        employee=employee,
+        project=project,
+        start_datetime=start_datetime,
+        due_date=due_date,
+    )
+    result["suggested_due_date"] = None
+
+    if include_suggestion and not result["valid"]:
+        previous = due_date
+        first_valid = None
+
+        # Find a feasible range quickly, preserving the selected clock time.
+        for day_offset in [1, 2, 4, 7, 14, 30, 60]:
+            candidate_due = due_date + timedelta(days=day_offset)
+            candidate = _calculate_task_availability_once(
+                employee=employee,
+                project=project,
+                due_date=candidate_due,
+                expected_duration=expected_duration,
+                actual_duration=actual_duration,
+                start_datetime=start_datetime,
+                task_id=task_id,
+                extra_leaves=extra_leaves,
+            )
+            if candidate["valid"]:
+                first_valid = candidate_due
+                break
+            previous = candidate_due
+
+        if first_valid:
+            # Refine between the last invalid and first valid point.
+            low = previous
+            high = first_valid
+            for _ in range(8):
+                midpoint = low + (high - low) / 2
+                candidate = _calculate_task_availability_once(
+                    employee=employee,
+                    project=project,
+                    due_date=midpoint,
+                    expected_duration=expected_duration,
+                    actual_duration=actual_duration,
+                    start_datetime=start_datetime,
+                    task_id=task_id,
+                    extra_leaves=extra_leaves,
+                )
+                if candidate["valid"]:
+                    high = midpoint
+                else:
+                    low = midpoint
+            result["suggested_due_date"] = high
+
+    return result
+
+
+def calculate_safe_assignable_hours(
+    *,
+    employee,
+    project,
+    due_date,
+    start_datetime=None,
+    extra_leaves=None,
+):
+    """Return the largest additional task duration that can be assigned safely.
+
+    The value is deadline-specific and keeps all existing workspace tasks
+    schedulable. It therefore represents real free capacity, not raw schedule
+    hours.
+    """
+    start_datetime = start_datetime or timezone.now()
+    if due_date is None or due_date <= start_datetime:
+        return 0.0
+
+    raw_capacity = WorkingTimeService.get_working_hours_between(
+        workspace=project.workspace,
+        start_datetime=start_datetime,
+        end_datetime=due_date,
+    )
+
+    low = 0.0
+    high = max(float(raw_capacity), 0.0)
+
+    # Binary search is enough to two-decimal-hour precision while avoiding a
+    # potentially expensive minute-by-minute search.
+    for _ in range(10):
+        midpoint = (low + high) / 2
+        result = _calculate_task_availability_once(
+            employee=employee,
+            project=project,
+            due_date=due_date,
+            expected_duration=timedelta(hours=midpoint),
+            actual_duration=timedelta(0),
+            start_datetime=start_datetime,
+            extra_leaves=extra_leaves,
+        )
+
+        if result["valid"]:
+            low = midpoint
+        else:
+            high = midpoint
+
+    return round(low, 2)
+
+
 def validate_employee_task_availability(
     *,
     employee,
@@ -64,122 +736,48 @@ def validate_employee_task_availability(
     actual_duration=None,
     start_datetime=None,
     task_id=None,
+    extra_leaves=None,
 ):
+    """Single validation entry point used by create/update/assign flows."""
     if due_date is None or expected_duration is None:
         return
 
-    actual_duration = actual_duration or timedelta(0)
-
-
-    remaining_duration = max(
-        expected_duration - actual_duration,
-        timedelta(0),
-    )
-    existing_tasks = Task.objects.filter(
-        assigned_to=employee,
+    result = calculate_employee_task_availability(
+        employee=employee,
         project=project,
-        is_deleted=False,
-        is_archived=False,
-    ).exclude(
-        status="DONE"
-    )
-    print(existing_tasks.count())
-    if task_id:
-            existing_tasks = existing_tasks.exclude(
-                id=task_id
-            )
-
-    busy_duration = timedelta(0)
-
-    for existing_task in existing_tasks:
-        busy_duration += max(
-            (
-                existing_task.expected_duration
-                or timedelta(0)
-            )
-            -
-            (
-                existing_task.actual_duration
-                or timedelta(0)
-            ),
-            timedelta(0),
-        )
-
-
-    total_required_duration = (
-        busy_duration + remaining_duration
+        due_date=due_date,
+        expected_duration=expected_duration,
+        actual_duration=actual_duration,
+        start_datetime=start_datetime or timezone.now(),
+        task_id=task_id,
+        extra_leaves=extra_leaves,
+        include_suggestion=False,
     )
 
-    start_time = start_datetime or timezone.now()
+    if result["valid"]:
+        return result
 
-    available_duration = WorkingTimeService.get_working_hours_between(
-        workspace=project.workspace,
-        start_datetime=start_time,
-        end_datetime=due_date,
-    )
-
-    approved_leaves = RequestForm.objects.filter(
-        user=employee,
-        project=project,
-        request_type="LEAVE",
-        status="APPROVED",
-        leave_end__gte=start_time,
-    ).order_by("leave_start")
-    
-
-    print("EXPECTED:", expected_duration)
-    print("ACTUAL:", actual_duration)
-    print("REMAINING:", remaining_duration)
-    print("BUSY:", busy_duration)
-    print("TOTAL:", total_required_duration)
-
-    for leave in approved_leaves:
-
-        if leave.leave_start <= start_time <= leave.leave_end:
-            raise ValidationError({
-                "assigned_to": (
-                    "The employee is on approved leave when the task starts "
-                    "and cannot be assigned this task."
-                )
-            })
-
-        if (
-            start_time < leave.leave_end
-            and due_date > leave.leave_start
-        ):
-            raise ValidationError({
-                "assigned_to": (
-                    "The task deadline overlaps with the employee's approved leave. "
-                    "Please set the deadline before the leave starts "
-                )
-            })
-
-
-    if (
-        total_required_duration.total_seconds() / 3600
-        > available_duration
-    ):
+    if result["reason"] == "DUE_DATE_NOT_IN_FUTURE":
         raise ValidationError({
-            "assigned_to": (
-                "This employee does not have enough "
-                "available working time."
-            ),
-            "required_hours": round(
-                total_required_duration.total_seconds() / 3600,
-                2,
-            ),
-            "available_hours": round(
-                available_duration,
-                2,
-            ),
+            "due_date": "Due date must be in the future.",
+            "code": result["reason"],
         })
 
+    message = (
+        "The employee does not have enough schedulable working time "
+        "before this deadline after considering workspace workload "
+        "and project leave periods."
+    )
 
-
-
-
-
-
+    raise ValidationError({
+        "assigned_to": message,
+        "code": result["reason"],
+        "required_hours": result["required_hours"],
+        "available_hours": result["available_hours"],
+        "deficit_hours": result["deficit_hours"],
+        "affected_tasks": result["affected_tasks"],
+        "existing_conflicts": result.get("existing_conflicts", []),
+    })
 
 def get_active_leave_pause_action(task):
     return (
@@ -1131,6 +1729,66 @@ class TaskService:
 
 
     @staticmethod
+    def _refresh_open_leave_analyses_for_task(*, task, manager_user):
+        """Refresh open leave analyses after a technical report decision.
+
+        REVIEW tasks are intentionally left unresolved in leave analysis until
+        the manager decides the submitted technical report. Once the report is
+        approved or rejected, the leave impact must be recalculated so the task
+        becomes DONE or returns to the employee workload.
+        """
+        if not task.assigned_to_id:
+            return []
+
+        open_requests = list(
+            RequestForm.objects.filter(
+                user=task.assigned_to,
+                project=task.project,
+                request_type="LEAVE",
+                status__in=["PENDING", "ACTION_REQUIRED", "ON_HOLD"],
+                leave_end__gt=timezone.now(),
+            ).select_related("project", "user")
+        )
+
+        if not open_requests:
+            return []
+
+        reviewer_role = ProjectRole.objects.filter(
+            project=task.project,
+            user=manager_user,
+            role__in=["ADMIN", "MANAGER"],
+        ).values_list("role", flat=True).first()
+
+        if not reviewer_role:
+            return []
+
+        # Local import avoids a module-level circular dependency because
+        # leave_service imports TaskService.
+        from users.services.leave_service import LeaveRequestService
+
+        refreshed = []
+        for leave_request in open_requests:
+            if leave_request.user_id == manager_user.id:
+                continue
+
+            owner_role = ProjectRole.objects.filter(
+                project=task.project,
+                user=leave_request.user,
+            ).values_list("role", flat=True).first()
+
+            if owner_role == "MANAGER" and reviewer_role != "ADMIN":
+                continue
+
+            LeaveRequestService.analyze_leave_impact(
+                leave_request=leave_request,
+                manager_user=manager_user,
+            )
+            refreshed.append(leave_request.id)
+
+        return refreshed
+
+
+    @staticmethod
     def review_technical_report(
         task,
         report,
@@ -1310,6 +1968,13 @@ class TaskService:
             },
         )
 
+        refreshed_leave_request_ids = (
+            TaskService._refresh_open_leave_analyses_for_task(
+                task=task,
+                manager_user=manager_user,
+            )
+        )
+
         return {
             "id": report.id,
             "status": report.status,
@@ -1321,6 +1986,7 @@ class TaskService:
                 report.manager_feedbacks
             ),
             "task_status": task.status,
+            "refreshed_leave_request_ids": refreshed_leave_request_ids,
         }
 
 

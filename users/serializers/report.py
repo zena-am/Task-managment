@@ -114,6 +114,9 @@ class LeaveTaskActionSerializer(serializers.ModelSerializer):
         read_only=True,
     )
     resolved_by_name = serializers.SerializerMethodField()
+    allowed_actions = serializers.SerializerMethodField()
+    requires_manager_decision = serializers.SerializerMethodField()
+    review_report_id = serializers.SerializerMethodField()
 
     class Meta:
         model = LeaveTaskAction
@@ -127,6 +130,9 @@ class LeaveTaskActionSerializer(serializers.ModelSerializer):
             "current_assignee",
             "impact",
             "requires_action",
+            "allowed_actions",
+            "requires_manager_decision",
+            "review_report_id",
             "action",
             "action_display",
             "new_assignee",
@@ -152,11 +158,41 @@ class LeaveTaskActionSerializer(serializers.ModelSerializer):
             "current_assignee",
             "impact",
             "requires_action",
+            "allowed_actions",
+            "requires_manager_decision",
+            "review_report_id",
             "is_resolved",
             "created_at",
             'resolved_by_name',
             "updated_at",
         ]
+
+    def get_allowed_actions(self, obj):
+        if obj.is_resolved or not obj.requires_action:
+            return []
+        if obj.task.status == "REVIEW":
+            # The technical report is reviewed through the existing report
+            # review endpoint, not through the leave-action resolve endpoint.
+            return []
+        return ["TRANSFER_TASK", "EXTEND_DUE_DATE"]
+
+    def get_requires_manager_decision(self, obj):
+        return (
+            not obj.is_resolved
+            and obj.requires_action
+            and obj.task.status == "REVIEW"
+        )
+
+    def get_review_report_id(self, obj):
+        if obj.task.status != "REVIEW":
+            return None
+        report = (
+            obj.task.technical_reports
+            .filter(status="SUBMITTED")
+            .order_by("-created_at")
+            .first()
+        )
+        return report.id if report else None
 
     def get_resolved_by_name(self, obj):
         if not obj.resolved_by:
@@ -191,7 +227,11 @@ class LeaveTaskActionSerializer(serializers.ModelSerializer):
 
 class ResolveLeaveTaskActionSerializer(serializers.Serializer):
     action = serializers.ChoiceField(
-        choices=LeaveTaskAction.ACTION_CHOICES,
+        choices=[
+            "NO_ACTION",
+            "TRANSFER_TASK",
+            "EXTEND_DUE_DATE",
+        ],
     )
 
     new_assignee = serializers.PrimaryKeyRelatedField(
@@ -243,17 +283,6 @@ class ResolveLeaveTaskActionSerializer(serializers.Serializer):
                 })
 
 
-
-            attrs["new_assignee"] = None
-
-        elif action == "PAUSE_TASK":
-            if not new_due_date:
-                raise serializers.ValidationError({
-                    "new_due_date": (
-                        "New due date is required when "
-                        "pausing a task for leave."
-                    )
-                })
 
             attrs["new_assignee"] = None
 

@@ -705,17 +705,33 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
             "expected_duration",
             self.instance.expected_duration if self.instance else None
         )
-        assignee_changed = (
-            assigned_to is not None
-            and (
-                self.instance is None
-                or self.instance.assigned_to_id != assigned_to.id
-            )
-)
+        effective_assignee = attrs.get(
+            "assigned_to",
+            self.instance.assigned_to if self.instance else None,
+        )
 
-        if assignee_changed and project:
+        availability_changed = (
+            self.instance is None
+            or any(
+                field in attrs
+                for field in [
+                    "assigned_to",
+                    "project",
+                    "due_date",
+                    "expected_duration",
+                ]
+            )
+        )
+
+        if (
+            availability_changed
+            and effective_assignee is not None
+            and project
+            and due_date
+            and expected_duration
+        ):
             validate_employee_task_availability(
-                employee=assigned_to,
+                employee=effective_assignee,
                 project=project,
                 due_date=due_date,
                 expected_duration=expected_duration,
@@ -731,49 +747,6 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
                     else None
                 ),
             )
-
-        if due_date and expected_duration and project:
-
-
-            if self.instance:
-                start_time = (
-                    self.instance.assigned_at
-                    or self.instance.created_at
-                )
-            else:
-                start_time = timezone.now()
-
-            available_hours = (
-                WorkingTimeService.get_working_hours_between(
-                    workspace=project.workspace,
-                    start_datetime=start_time,
-                    end_datetime=due_date,
-                )
-            )
-
-            expected_hours = (
-                expected_duration.total_seconds()
-                / 3600
-            )
-
-            if expected_hours > available_hours:
-                raise serializers.ValidationError({
-                        "code": "INSUFFICIENT_WORKING_TIME",
-                        "message": (
-                            f"The selected due date provides "
-                            f"{round(available_hours, 2)} working hours, "
-                            f"but this task requires "
-                            f"{round(expected_hours, 2)} working hours."
-                        ),
-                        "required_hours": round(
-                            expected_hours,
-                            2,
-                        ),
-                        "available_hours": round(
-                            available_hours,
-                            2,
-                        ),
-                    })
 
 
         if (

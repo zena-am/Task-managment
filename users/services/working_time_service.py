@@ -1,7 +1,114 @@
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from django.utils import timezone
 
 
 class WorkingTimeService:
+    DAYS = [
+        "MON",
+        "TUE",
+        "WED",
+        "THU",
+        "FRI",
+        "SAT",
+        "SUN",
+    ]
+
+    @staticmethod
+    def _workspace_timezone(workspace):
+        schedule = workspace.working_schedule
+        try:
+            return ZoneInfo(schedule.timezone or "UTC")
+        except ZoneInfoNotFoundError:
+            return timezone.get_current_timezone()
+
+    @staticmethod
+    def _as_workspace_datetime(*, workspace, value):
+        workspace_tz = WorkingTimeService._workspace_timezone(workspace)
+
+        if timezone.is_naive(value):
+            value = timezone.make_aware(value, workspace_tz)
+
+        return value.astimezone(workspace_tz)
+
+    @staticmethod
+    def get_working_intervals(
+        *,
+        workspace,
+        start_datetime,
+        end_datetime,
+    ):
+        """Return real working intervals in the workspace timezone.
+
+        The result respects each day's enabled/start/end values from
+        weekly_schedule. 24-hour workspaces return one continuous interval.
+        """
+        if start_datetime is None or end_datetime is None:
+            return []
+
+        start_local = WorkingTimeService._as_workspace_datetime(
+            workspace=workspace,
+            value=start_datetime,
+        )
+        end_local = WorkingTimeService._as_workspace_datetime(
+            workspace=workspace,
+            value=end_datetime,
+        )
+
+        if start_local >= end_local:
+            return []
+
+        schedule = workspace.working_schedule
+
+        if schedule.is_24_hours:
+            return [(start_local, end_local)]
+
+        weekly_schedule = schedule.weekly_schedule or {}
+        intervals = []
+        current_date = start_local.date()
+
+        while current_date <= end_local.date():
+            day_name = WorkingTimeService.DAYS[current_date.weekday()]
+            day_schedule = weekly_schedule.get(day_name)
+
+            if day_schedule and day_schedule.get("enabled"):
+                start_text = day_schedule.get("start")
+                end_text = day_schedule.get("end")
+
+                if start_text and end_text:
+                    start_time = datetime.strptime(
+                        start_text,
+                        "%H:%M",
+                    ).time()
+                    end_time = datetime.strptime(
+                        end_text,
+                        "%H:%M",
+                    ).time()
+
+                    day_start = datetime.combine(
+                        current_date,
+                        start_time,
+                        tzinfo=start_local.tzinfo,
+                    )
+                    day_end = datetime.combine(
+                        current_date,
+                        end_time,
+                        tzinfo=start_local.tzinfo,
+                    )
+
+                    interval_start = max(start_local, day_start)
+                    interval_end = min(end_local, day_end)
+
+                    if interval_end > interval_start:
+                        intervals.append(
+                            (interval_start, interval_end)
+                        )
+
+            current_date += timedelta(days=1)
+
+        return intervals
+
     @staticmethod
     def get_working_hours_between(
         *,
@@ -9,120 +116,18 @@ class WorkingTimeService:
         start_datetime,
         end_datetime,
     ):
-
-        if start_datetime >= end_datetime:
-            return 0
-
-        schedule = workspace.working_schedule
-
-        if schedule.is_24_hours:
-            seconds = (
-                end_datetime - start_datetime
-            ).total_seconds()
-
-            return round(seconds / 3600, 2)
-
-        total_hours = 0
-
-        current = start_datetime
-
-        weekly_schedule = (
-            schedule.weekly_schedule
-            or {}
+        intervals = WorkingTimeService.get_working_intervals(
+            workspace=workspace,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
         )
 
-        days = [
-            "MON",
-            "TUE",
-            "WED",
-            "THU",
-            "FRI",
-            "SAT",
-            "SUN",
-        ]
-
-        while current.date() <= end_datetime.date():
-
-            day_name = days[current.weekday()]
-
-            day_schedule = weekly_schedule.get(day_name)
-
-            if (
-                not day_schedule
-                or not day_schedule.get("enabled")
-            ):
-                current = datetime.combine(
-                    current.date() + timedelta(days=1),
-                    datetime.min.time(),
-                    tzinfo=current.tzinfo,
-                )
-                continue
-
-            start_time = datetime.strptime(
-                day_schedule["start"],
-                "%H:%M",
-            ).time()
-
-            end_time = datetime.strptime(
-                day_schedule["end"],
-                "%H:%M",
-            ).time()
-
-            day_start = datetime.combine(
-                current.date(),
-                start_time,
-                tzinfo=current.tzinfo,
-            )
-
-            day_end = datetime.combine(
-                current.date(),
-                end_time,
-                tzinfo=current.tzinfo,
-            )
-
-            period_start = max(
-                current,
-                day_start,
-            )
-
-            period_end = min(
-                end_datetime,
-                day_end,
-            )
-
-            if period_end > period_start:
-
-                seconds = (
-                    period_end - period_start
-                ).total_seconds()
-
-                total_hours += (
-                    seconds / 3600
-                )
-
-            current = datetime.combine(
-                current.date() + timedelta(days=1),
-                datetime.min.time(),
-                tzinfo=current.tzinfo,
-            )
-
-        return round(
-            total_hours,
-            2,
+        total_seconds = sum(
+            (interval_end - interval_start).total_seconds()
+            for interval_start, interval_end in intervals
         )
 
-
-
-
-
-
-
-
-
-
-
-
-
+        return round(total_seconds / 3600, 2)
 
     @staticmethod
     def add_working_hours(
@@ -131,108 +136,41 @@ class WorkingTimeService:
         start_datetime,
         hours,
     ):
+        if hours <= 0:
+            return start_datetime
 
-        schedule = workspace.working_schedule
-
-        if schedule.is_24_hours:
-
-            return (
-                start_datetime
-                + timedelta(hours=hours)
-            )
-
-
-        current = start_datetime
-
-        remaining = hours
-
-        weekly_schedule = (
-            schedule.weekly_schedule
-            or {}
+        original_tz = start_datetime.tzinfo
+        current = WorkingTimeService._as_workspace_datetime(
+            workspace=workspace,
+            value=start_datetime,
         )
+        remaining = float(hours)
 
-
-        while remaining > 0:
-
-
-            days = [
-                "MON",
-                "TUE",
-                "WED",
-                "THU",
-                "FRI",
-                "SAT",
-                "SUN",
-            ]
-
-            day_name = days[current.weekday()]
-
-
-            day_schedule = (
-                weekly_schedule.get(day_name)
+        # Search in bounded chunks so disabled days and irregular schedules
+        # are handled without assuming a fixed number of hours per day.
+        for _ in range(24):  # up to roughly two years of schedule search
+            window_end = current + timedelta(days=31)
+            intervals = WorkingTimeService.get_working_intervals(
+                workspace=workspace,
+                start_datetime=current,
+                end_datetime=window_end,
             )
 
+            for interval_start, interval_end in intervals:
+                available = (
+                    interval_end - interval_start
+                ).total_seconds() / 3600
 
-            if (
-                day_schedule
-                and day_schedule.get("enabled")
-            ):
+                if remaining <= available:
+                    result = interval_start + timedelta(hours=remaining)
+                    if original_tz is not None:
+                        return result.astimezone(original_tz)
+                    return result
 
-                start_time = datetime.strptime(
-                    day_schedule["start"],
-                    "%H:%M",
-                ).time()
+                remaining -= available
 
+            current = window_end
 
-                end_time = datetime.strptime(
-                    day_schedule["end"],
-                    "%H:%M",
-                ).time()
-
-
-                day_start = datetime.combine(
-                    current.date(),
-                    start_time,
-                    tzinfo=current.tzinfo,
-                )
-
-
-                day_end = datetime.combine(
-                    current.date(),
-                    end_time,
-                    tzinfo=current.tzinfo,
-                )
-
-
-                if current < day_start:
-                    current = day_start
-
-
-                if current < day_end:
-
-                    available_hours = (
-                        day_end - current
-                    ).total_seconds() / 3600
-
-
-                    if remaining <= available_hours:
-
-                        return (
-                            current
-                            + timedelta(
-                                hours=remaining
-                            )
-                        )
-
-
-                    remaining -= available_hours
-
-
-            current = datetime.combine(
-                current.date() + timedelta(days=1),
-                datetime.min.time(),
-                tzinfo=current.tzinfo,
-            )
-
-
-        return current
+        raise ValueError(
+            "Unable to calculate a due date from the workspace schedule."
+        )
