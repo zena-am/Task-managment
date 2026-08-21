@@ -70,6 +70,7 @@ def validate_employee_task_availability(
 
     actual_duration = actual_duration or timedelta(0)
 
+
     remaining_duration = max(
         expected_duration - actual_duration,
         timedelta(0),
@@ -82,6 +83,7 @@ def validate_employee_task_availability(
     ).exclude(
         status="DONE"
     )
+    print(existing_tasks.count())
     if task_id:
             existing_tasks = existing_tasks.exclude(
                 id=task_id
@@ -123,38 +125,35 @@ def validate_employee_task_availability(
         status="APPROVED",
         leave_end__gte=start_time,
     ).order_by("leave_start")
+    
 
+    print("EXPECTED:", expected_duration)
+    print("ACTUAL:", actual_duration)
+    print("REMAINING:", remaining_duration)
+    print("BUSY:", busy_duration)
+    print("TOTAL:", total_required_duration)
 
     for leave in approved_leaves:
 
         if leave.leave_start <= start_time <= leave.leave_end:
             raise ValidationError({
                 "assigned_to": (
-                    "This employee is currently on approved leave "
-                    "and cannot receive new tasks."
+                    "The employee is on approved leave when the task starts "
+                    "and cannot be assigned this task."
                 )
             })
 
-
         if (
-            start_time < leave.leave_start < due_date
+            start_time < leave.leave_end
+            and due_date > leave.leave_start
         ):
-            hours_before_leave = WorkingTimeService.get_working_hours_between(
-                workspace=project.workspace,
-                start_datetime=start_time,
-                end_datetime=leave.leave_start,
-            )
+            raise ValidationError({
+                "assigned_to": (
+                    "The task deadline overlaps with the employee's approved leave. "
+                    "Please set the deadline before the leave starts "
+                )
+            })
 
-            hours_after_leave = WorkingTimeService.get_working_hours_between(
-                workspace=project.workspace,
-                start_datetime=leave.leave_end,
-                end_datetime=due_date,
-            )
-
-            available_duration = (
-                hours_before_leave
-                + hours_after_leave
-            )
 
     if (
         total_required_duration.total_seconds() / 3600

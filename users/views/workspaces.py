@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import viewsets, permissions, status
@@ -17,7 +19,7 @@ from users.errors.exceptions import BaseAppException, PermissionDeniedError
 from users.errors.messages.success import success_response
 from users.services.WorkspaceService import WorkspaceServices
 from users.constants import create_activity_log
-from ..models import Task, User, WorkSpace, WorkSpaceMember
+from ..models import RequestForm, Task, User, WorkSpace, WorkSpaceMember
 from ..serializers import WorkSpaceSerializer, WorkSpaceCreateSerializer
 from ..permissions import IsWorkspaceOwnerOrReadOnly
 from rest_framework.views import APIView
@@ -273,8 +275,17 @@ class TaskWorkingTimeCheckAPIView(APIView):
         due_date = request.data.get("due_date")
         due_date = parse_datetime(due_date)
         task_id = request.data.get("task_id")
+        employee_id = request.data.get("employee")
+        employee = User.objects.get(id=employee_id)
 
 
+
+        if not employee_id:
+            raise serializers.ValidationError({
+                "employee": "Employee is required."
+            })
+
+        employee = User.objects.get(id=employee_id)
         if not due_date:
             raise serializers.ValidationError({
                 "due_date": "Invalid datetime format."
@@ -310,13 +321,79 @@ class TaskWorkingTimeCheckAPIView(APIView):
         )
 
 
-        available_hours = (
+        workspace_hours = (
             WorkingTimeService.get_working_hours_between(
                 workspace=project.workspace,
                 start_datetime=start_datetime,
                 end_datetime=due_date,
             )
         )
+        busy_hours = 0
+
+        existing_tasks = Task.objects.filter(
+            assigned_to=employee,
+            project=project,
+            is_deleted=False,
+            is_archived=False,
+        ).exclude(
+            status="DONE"
+        )
+        if task_id:
+            existing_tasks = existing_tasks.exclude(
+                id=task_id
+            )
+
+
+        for task in existing_tasks:
+            remaining = max(
+                (
+                    task.expected_duration or timedelta(0)
+                )
+                -
+                (
+                    task.actual_duration or timedelta(0)
+                ),
+                timedelta(0),
+            )
+
+            busy_hours += (
+                remaining.total_seconds() / 3600
+    )
+
+
+        leave_hours = 0
+
+        approved_leaves = RequestForm.objects.filter(
+            user=employee,
+            project=project,
+            request_type="LEAVE",
+            status="APPROVED",
+        )
+
+        for leave in approved_leaves:
+            leave_start = max(
+                start_datetime,
+                leave.leave_start,
+            )
+
+            leave_end = min(
+                due_date,
+                leave.leave_end,
+            )
+
+            if leave_end > leave_start:
+                leave_hours += WorkingTimeService.get_working_hours_between(
+                    workspace=project.workspace,
+                    start_datetime=leave_start,
+                    end_datetime=leave_end,
+                )
+        available_hours = (
+            workspace_hours
+            - busy_hours
+            - leave_hours
+)
+
+
 
 
         valid = (
@@ -331,6 +408,7 @@ class TaskWorkingTimeCheckAPIView(APIView):
                 start_datetime=timezone.now(),
                 hours=float(expected_hours),
             )
+
 
 
         return Response({
