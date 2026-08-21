@@ -3,8 +3,8 @@ from ..models import Invitation
 
 
 class InvitationSerializer(serializers.ModelSerializer):
-    sender_name = serializers.CharField(source='sender.username', read_only=True)
-    receiver_name = serializers.CharField(source='receiver.username', read_only=True, default=None)
+    sender_name = serializers.SerializerMethodField()
+    receiver_name = serializers.SerializerMethodField()
     project_name = serializers.CharField(source='project.name', read_only=True, default=None)
     workspace_name = serializers.CharField(source='workspace.name', read_only=True)
     receiver_email = serializers.EmailField(required=False)
@@ -21,6 +21,21 @@ class InvitationSerializer(serializers.ModelSerializer):
             'role', 'status', 'permissions', 'created_at',
         ]
         read_only_fields = ['sender', 'status', 'created_at']
+
+
+    def get_sender_name(self, obj):
+        sender = getattr(obj, "sender", None)
+        if sender is None:
+            return "Unknown sender"
+        full_name = sender.get_full_name().strip()
+        return full_name or sender.username
+
+    def get_receiver_name(self, obj):
+        receiver = getattr(obj, "receiver", None)
+        if receiver is None:
+            return None
+        full_name = receiver.get_full_name().strip()
+        return full_name or receiver.username
 
     def get_permissions(self, obj):
         request = self.context.get("request")
