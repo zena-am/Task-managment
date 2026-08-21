@@ -66,13 +66,22 @@ class GoogleFirebaseAuthView(APIView):
 
             name = decoded_token.get("name") or email.split("@")[0]
 
-            user, created = User.objects.get_or_create(
-                email=email,
-                defaults={
-                    "username": email,
-                    "first_name": name,
-                },
-            )
+            user = User.all_objects.filter(
+                email__iexact=email
+            ).first()
+
+            if user:
+                if user.is_deleted:
+                    user.is_deleted = False
+                    user.is_active = True
+                    user.save()
+
+            else:
+                user = User.objects.create(
+                    email=email,
+                    username=email,
+                    first_name=name,
+                )
 
             if not user.first_name and name:
                 user.first_name = name
