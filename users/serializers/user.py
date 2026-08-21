@@ -49,11 +49,32 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         model = User
         fields = ['username', 'email', 'password']
 
+
     def create(self, validated_data):
+        email = validated_data.get("email")
+
+        existing_user = User.all_objects.filter(
+            email__iexact=email
+        ).first()
+
+        if existing_user:
+            if existing_user.is_deleted:
+                existing_user.is_deleted = False
+                existing_user.is_active = True
+                existing_user.set_password(
+                    validated_data.get("password")
+                )
+                existing_user.save()
+
+                return existing_user
+
+            raise serializers.ValidationError(
+                {
+                    "email": "A user with this email already exists."
+                }
+            )
+
         return User.objects.create_user(**validated_data)
-
-
-
 
 
 
