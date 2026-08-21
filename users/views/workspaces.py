@@ -329,12 +329,12 @@ class TaskWorkingTimeCheckAPIView(APIView):
             )
         )
         busy_hours = 0
-
         existing_tasks = Task.objects.filter(
             assigned_to=employee,
             project=project,
             is_deleted=False,
             is_archived=False,
+            due_date__lte=due_date,
         ).exclude(
             status="DONE"
         )
@@ -363,11 +363,22 @@ class TaskWorkingTimeCheckAPIView(APIView):
 
         leave_hours = 0
 
+
         approved_leaves = RequestForm.objects.filter(
             user=employee,
             project=project,
             request_type="LEAVE",
             status="APPROVED",
+        )
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        logger.warning(
+            "workspace=%s busy=%s leave=%s",
+            workspace_hours,
+            busy_hours,
+            leave_hours
         )
 
         for leave in approved_leaves:
