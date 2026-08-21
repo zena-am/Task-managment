@@ -196,8 +196,8 @@ def validate_workspace_task_schedule(
 def get_task_remaining_duration(task, *, now=None):
     """Return only the work that is still required for a task."""
     now = now or timezone.now()
-    expected = task.expected_duration or timedelta(0)
-    actual = task.actual_duration or timedelta(0)
+    expected = max(task.expected_duration or timedelta(0), timedelta(0))
+    actual = max(task.actual_duration or timedelta(0), timedelta(0))
 
     if task.status == "INPROGRESS" and task.start_time:
         current_session = max(
@@ -558,7 +558,8 @@ def _calculate_task_availability_once(
     extra_leaves=None,
 ):
     start_datetime = start_datetime or timezone.now()
-    actual_duration = actual_duration or timedelta(0)
+    expected_duration = max(expected_duration or timedelta(0), timedelta(0))
+    actual_duration = max(actual_duration or timedelta(0), timedelta(0))
 
     current_session = timedelta(0)
     if task_id:
