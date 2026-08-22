@@ -1,5 +1,6 @@
 from datetime import timedelta
 import os
+import re
 from django.utils import timezone
 from rest_framework import serializers
 from users.serializers.user import UserSerializer
@@ -558,10 +559,37 @@ class AddTaskDependencySerializer(serializers.Serializer):
 ##################################################
 ##################################################
 ##################################################
+_DATE_ONLY_INPUT = re.compile(r"^\s*\d{1,4}[-/]\d{1,2}[-/]\d{1,4}\s*$")
+
+
+class WorkspaceLocalDateTimeField(serializers.DateTimeField):
+    """Date-time field that does NOT attach ``settings.TIME_ZONE`` to naive input.
+
+    Deadlines are compared against ``workspace.working_schedule.timezone``
+    (see ``WorkingTimeService._as_workspace_datetime``). DRF, however, makes a
+    naive value aware in ``settings.TIME_ZONE``; when the two zones differ the
+    wall clock shifts and a deadline typed inside working hours is rejected as
+    DUE_DATE_OUTSIDE_WORKING_SCHEDULE.
+
+    So naive input stays naive here and is localized in ``validate()``, where
+    the project - and therefore the workspace timezone - is known. Input that
+    carries an explicit offset is respected exactly as sent.
+    """
+
+    def to_internal_value(self, value):
+        self.received_date_only = bool(
+            isinstance(value, str) and _DATE_ONLY_INPUT.match(value)
+        )
+        return super().to_internal_value(value)
+
+    def enforce_timezone(self, value):
+        return value
+
+
 class TaskCreateUpdateSerializer(serializers.ModelSerializer):
     image_files = serializers.ListField(child=serializers.ImageField(), write_only=True, required=False)
     document_files = serializers.ListField(child=serializers.FileField(), write_only=True, required=False)
-    due_date = serializers.DateTimeField(
+    due_date = WorkspaceLocalDateTimeField(
         input_formats=["%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S%z", "iso-8601","%Y-%m-%dT%H:%M:%S"]
     )
     dependency_ids = serializers.PrimaryKeyRelatedField(
@@ -641,6 +669,39 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
                 )
 
         return files
+
+    def _localize_due_date(self, value, project):
+        """Interpret a naive deadline as workspace wall-clock time.
+
+        A bare date (``2026-09-01``) means midnight, which sits outside every
+        working schedule. Rather than rejecting the whole request, it is moved
+        to the end of that day's working window, i.e. "by the end of that
+        working day". A date on a non-working day is left untouched so the
+        schedule validator can report the real reason.
+        """
+        if timezone.is_aware(value):
+            return value
+
+        workspace = project.workspace
+        workspace_tz = WorkingTimeService._workspace_timezone(workspace)
+
+        if getattr(self.fields["due_date"], "received_date_only", False):
+            status = WorkingTimeService.get_deadline_schedule_status(
+                workspace=workspace,
+                value=timezone.make_aware(value, workspace_tz),
+            )
+            end_text = status.get("end")
+            if end_text:
+                hour, _, minute = end_text.partition(":")
+                value = value.replace(
+                    hour=int(hour),
+                    minute=int(minute or 0),
+                    second=0,
+                    microsecond=0,
+                )
+
+        return timezone.make_aware(value, workspace_tz)
+
     def validate(self, attrs):
         parent = attrs.get("parent")
         assigned_to = attrs.get("assigned_to")
@@ -650,6 +711,9 @@ class TaskCreateUpdateSerializer(serializers.ModelSerializer):
             "project",
             self.instance.project if self.instance else None,
         )
+        if project is not None and attrs.get("due_date") is not None:
+            attrs["due_date"] = self._localize_due_date(attrs["due_date"], project)
+
         expected_duration = attrs.get('expected_duration')
         if expected_duration and expected_duration.total_seconds() <= 0:
                     raise serializers.ValidationError({"expected_duration": "it must be greater than 0"})
